@@ -125,37 +125,145 @@ A much easier calculation.
 
 Calculating $N(t)$ seems the hardest. We shall approximate $\overline N(t)$ with a differential equation:$$\frac {\partial \overline N}{\partial t}=\frac {\partial \overline N_+}{\partial t} - \frac {\partial \overline N_-}{\partial t}$$
 which simplifies to:$$\frac {\partial \overline N}{\partial t}=U.lognormal_{pdf}(t,\mu,\sigma) - \overline N(t).U_p.lognormal_{pdf}(t,\mu_p,\sigma_p)$$
-which contains only continuous numbers and can be solved for in stan using the PDE
+which contains only continuous numbers and can be solved for in stan using the PDE solver or the numerical integrator.
 
 
-```{stan, output.var="odemodel"}
-functions {
+```{stan, output.var="odemodel", eval= false}
 
-  // here we say that the number of claims that fall back to zero is dependent on the current number of non-zero claims (reported minus rejected). The number observed falling back to zero in a period is a proportion of those that are present (a binomial distribution). The proportion P is the integral of a (rate curve)*(#non-zero) over the period. Here #non-zero may be approximated by an expected number rather than actual.
-  vector zcumul(real t,
-             vector z,// expected # of non-zero claims falling back to zero by time t
-             real mu_z,// lognormal pdf for p rate
-             real sigma_z,// lognormal pdf for p rate
-             real ult_z, // lognormal_pdf*ult to give p rate
-             real NZ // current expected #>0 claims
+  // we solve for #>0 at any point in time t  
+vector N_ode(real t,//time
+             vector N,// expected # of non-zero claims and expected # dropping to zero at time t. must be a vector so 2d. This is what is being solved for.
+             real U,
+             real U_p,
+             real mu,
+             real sigma,
+             real mu_p,
+             real sigma_p
              ) {
-    vector[1] dzdt;
-    dzdt[1] = NZ*ult_z*exp(lognormal_lpdf(y,mu,sigma));
-    return dzdt;
-  }
-  // third we solve for #>0 at any point t  
-  vector NZcumul(real t,
-             vector NZ,// expected # of non-zero claims at time t
-             real dldt,// gradient of lambda ult*exp(lognormal_lpdf(t,mu,sigma))
-             real dzdt,// gradient of rate returning to zero NZ*ult_z*exp(lognormal_lpdf(y,mu,sigma))
-             ) {
-    vector[1] dnzdt;
-    dnzdt[1] = dldt-dzdt;
-    return dnzdt;
-  }
+    vector[2] dNdt;
+    dNdt[1] = U*lognormal_lpdf(t,mu,sigma)-N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims >0
+    dNdt[2] = N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);
+    return dNdt;// cumulative # claims dropped back to zero
 }
-```
+// modify signature for calls from the integrator to output N
+real[] N_ode_int(real t, 
+                  real [] N,  // both N and N_neg
+                  real [] theta, // model parameters
+              real [] x_r, int[] x_i
+             ) {
+    real dNdt[2];
+    real U = theta[1];
+    real U_p = theta[2];
+    real mu = theta[3];
+    real sigma = theta[4];
+    real mu = theta[5];
+    real sigma_p = theta[6];
+    
+    dNdt[1] = U*lognormal_lpdf(t,mu,sigma)-N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims >0
+    dNdt[2] = N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);
+    return dNdt;// cumulative # claims dropped back to zero
+}
 
+// Integrate ODE to solve for N at a point in time
+real N_int(real t,
+        vector N,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  // Solve ODEs
+  N = integrate_ode_rk45(ode_LV, 
+                         y0, 0, rep_array(t, 1), theta,
+                         rep_array(0.0, 0), rep_array(1, 1),
+                         0.001, 0.001, 100); // tolerances, steps
+  // Return relevant population values
+  return N;
+}
+
+// Integrate ODE to solve for N at a point in time
+real N_neg_int(real t,
+        vector N,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  // Solve ODEs
+  N_neg = integrate_ode_rk45(ode_LV, 
+                         y0, 0, rep_array(t, 1), theta,
+                         rep_array(0.0, 0), rep_array(1, 1),
+                         0.001, 0.001, 100); // tolerances, steps
+  // Return relevant population values
+  return N_neg;
+}
+
+```
+put this code into a text string and set up a brms formula
 ```{r}
-model$sample()
+functions = "vector NZcumul(real t,//time
+             vector NZ,// expected # of non-zero claims at time t. must be a vector so 1d. This is what is being solved for.
+             real U;
+             real U_p;
+             real mu;
+             real sigma;
+             real mu_p;
+             real sigma_p;
+             ) {
+    vector[1] dNZdt;
+    dNZdt[1] = U*lognormal_lpdf(t,mu,sigma)-NZ[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);
+    return dNZdt;
+}"
+
+# we are essentially declaring what the parameters need to be called
+fm <-  bf(
+  Pelts ~ eta,
+  nlf(eta ~ log(
+    LV(t, Hare0, Lynx0, 
+       brHare, mrHare,brLynx, mrLynx, delta)
+    )
+  ),
+  nlf(Hare0 ~ 10 * exp(stdNHare0)),
+  nlf(Lynx0 ~ 10 * exp(stdNLynx0)),
+  nlf(brHare ~ 0.5 * exp(0.25 * stdNbrHare)),
+  nlf(mrHare ~ 0.025 * exp(0.25 * stdNmrHare)),
+  nlf(brLynx ~ 0.025 * exp(0.25 * stdNbrLynx)),
+  nlf(mrLynx ~ 0.8 * exp(0.25 * stdNmrLynx)),
+  stdNHare0 ~ 1,  stdNLynx0 ~ 1,
+  stdNbrHare ~ 1, stdNmrHare ~ 1,
+  stdNbrLynx ~ 1, stdNmrLynx ~ 1,
+  sigma ~ 0 + Population,
+  nl = TRUE)
 ```
