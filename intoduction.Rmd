@@ -1,0 +1,161 @@
+---
+title: "ULR models"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Intro
+
+here we try to combine a frequency and average ckaim size model into an incurred model. we observe that there is a rate at which claims are transitioning back to zero. our intention is to model net non-zero claims above some very low threshold.
+
+```{r installbrms}
+library(devtools)
+remove.packages(c("StanHeaders", "rstan"))
+##install_github("hsbadr/rstan/StanHeaders@develop")
+install.packages("StanHeaders", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+install.packages("RcppEigen", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+#install_version("RcppEigen", "0.3.3.9.1")
+##install_github("hsbadr/rstan/rstan/rstan@develop")
+install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+install_github("paul-buerkner/brms",dependencies = TRUE)
+```
+## cmdstanr install
+
+```{r installcmdstanr, echo = FALSE}
+
+# this code chunk is made redundant by the installation of the github versions on BRMS and cmdstanr into the docker image.
+# see the "Dockerfile"
+install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+library(cmdstanr)
+check_cmdstan_toolchain(fix=TRUE)
+install_cmdstan(cores = 6,overwrite=TRUE)
+cmdstan_path()
+cmdstan_version()
+
+file <- file.path(cmdstan_path(), "examples", "bernoulli", "bernoulli.stan")
+mod <- cmdstan_model(file)
+
+data_list <- list(N = 10, y = c(0,1,0,0,0,0,0,0,0,1))
+
+# confirming models can run and run in parallel
+fit <- mod$sample(
+  data = data_list,
+  iter_warmup = 1000,
+  iter_sampling = 1e5,
+  seed = 123,
+  chains = 4,
+  parallel_chains = 4,
+  refresh = 1e4
+)
+```
+## set cmdstan to build models in the background
+
+```{r cmdstanparser}
+library(cmdstanr)
+
+register_knitr_engine()
+```
+
+## model development
+after looking into the problem further, it might be smart to set it up as an ODE model first.
+
+### example
+the example below is from the stan documentation. the syntax of the functions has changed recently, making it harder to just use what in on the internet. A great example from the older syntax is from Marcus Gessman on mages blog [mages blog ](https://magesblog.com/post/2021-02-08-fitting-multivariate-ode-models-with-brms/).
+
+```{stan, output.var="testmodel"}
+functions {
+  vector sho(real t,
+             vector y,
+             real theta) {
+    vector[2] dydt;
+    dydt[1] = y[2];
+    dydt[2] = -y[1] - theta * y[2];
+    return dydt;
+  }
+}
+data {
+  int<lower=1> T;
+  vector[2] y0;
+  real t0;
+  array[T] real ts;
+  real theta;
+}
+model {
+}
+generated quantities {
+  vector[2] y_sim[T] = ode_rk45(sho, y0, t0, ts, theta);
+  // add measurement error
+  for (t in 1:T) {
+    y_sim[t, 1] += normal_rng(0, 0.1);
+    y_sim[t, 2] += normal_rng(0, 0.1);
+  }
+}
+```
+
+
+### my first try
+I will try to get something working below.
+
+#### some basic points
+Start by just saying the the integral of the pdf is the lambda for any given time period, where the number of reported non-zero claims (excluding those that go back to zero) at any point in time is a poisson distribution with mean lambda. An analytic solution exists in terms of ult*lognormal_cdf(t,mu,sigma) where Ult is the ultimate expected number of claims that were ever positive.
+$$\frac{\partial \lambda}{\partial t} = U.lognormal_{pdf}(t,\mu,\sigma)$$
+the analytic solution is then $$\lambda(t) = U.lognormal_{cdf}(t,\mu,\sigma)$$ 
+
+where $\lambda$ is the expected cumulative (i.e. current actual) number of non zero claims ever reported at a given point in time. When time is infinity the expected claim count is $U$ (the ultimate expected number). 
+
+We will implement this as a standard poisson frequency model where we count the incremental number of reported non-nil claims.
+
+Similarly, we can represent the binomial rate of non-zero claims falling back to zero. This is unfortunately required at times as we are modelling net claims and there can easily be a significant number of "negative IBNR" in the late tail of the claim count triangulations.
+$$\frac{\partial p}{\partial t} = U_plognormal_{pdf}(t,\mu_p,\sigma_p)$$
+Then we can show the analytic solution for p:$$p(t)=U_plognormal_{cdf}(t,\mu,\sigma)$$
+but unfortunately: $$N_-(a)=\int_0^a\frac{\partial p}{\partial t}N(t) \partial t $$
+With a binomial distribution, the calculation is harder. Now we introduce the count of claims and the expected count of claims for the number of positive reported claims $N_+(t)$, the number of claims that have fallen back to zero $N_-(t)$ and the current actual number of non-zero claims $N$.An alternative for $N_-$ might now be: $$\frac{\partial \overline N_-}{\partial t}=\overline N \frac {\partial p}{\partial t}$$
+which is only true over many samples but is easier to solve for.
+Then we can represent a differential equation perhaps: 
+$$\frac{\partial \overline{N}_-}{\partial t} = \overline N(t).U_p.lognormal_{pdf}(t,\mu_p,\sigma_p)$$
+which involves no discrete numbers. 
+
+The first step of the process we can state more easily:
+$$N_+(t)=poisson(\lambda(t))$$
+A simple poisson sample. So $$\overline{N}_+(t)=\lambda(t)$$
+A much easier calculation.
+
+Calculating $N(t)$ seems the hardest. We shall approximate $\overline N(t)$ with a differential equation:$$\frac {\partial \overline N}{\partial t}=\frac {\partial \overline N_+}{\partial t} - \frac {\partial \overline N_-}{\partial t}$$
+which simplifies to:$$\frac {\partial \overline N}{\partial t}=U.lognormal_{pdf}(t,\mu,\sigma) - \overline N(t).U_p.lognormal_{pdf}(t,\mu_p,\sigma_p)$$
+which contains only continuous numbers and can be solved for in stan using the PDE
+
+
+```{stan, output.var="odemodel"}
+functions {
+
+  // here we say that the number of claims that fall back to zero is dependent on the current number of non-zero claims (reported minus rejected). The number observed falling back to zero in a period is a proportion of those that are present (a binomial distribution). The proportion P is the integral of a (rate curve)*(#non-zero) over the period. Here #non-zero may be approximated by an expected number rather than actual.
+  vector zcumul(real t,
+             vector z,// expected # of non-zero claims falling back to zero by time t
+             real mu_z,// lognormal pdf for p rate
+             real sigma_z,// lognormal pdf for p rate
+             real ult_z, // lognormal_pdf*ult to give p rate
+             real NZ // current expected #>0 claims
+             ) {
+    vector[1] dzdt;
+    dzdt[1] = NZ*ult_z*exp(lognormal_lpdf(y,mu,sigma));
+    return dzdt;
+  }
+  // third we solve for #>0 at any point t  
+  vector NZcumul(real t,
+             vector NZ,// expected # of non-zero claims at time t
+             real dldt,// gradient of lambda ult*exp(lognormal_lpdf(t,mu,sigma))
+             real dzdt,// gradient of rate returning to zero NZ*ult_z*exp(lognormal_lpdf(y,mu,sigma))
+             ) {
+    vector[1] dnzdt;
+    dnzdt[1] = dldt-dzdt;
+    return dnzdt;
+  }
+}
+```
+
+```{r}
+model$sample()
+```
