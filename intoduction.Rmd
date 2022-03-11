@@ -160,13 +160,12 @@ real[] N_ode_int(real t,
     real sigma_p = theta[6];
     
     dNdt[1] = U*lognormal_lpdf(t,mu,sigma)-N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims >0
-    dNdt[2] = N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);
-    return dNdt;// cumulative # claims dropped back to zero
+    dNdt[2] = N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims dropped back to zero
+    return dNdt;
 }
 
 // Integrate ODE to solve for N at a point in time
 real N_int(real t,
-        vector N,
         real U,
         real U_p,
         real mu,
@@ -176,7 +175,7 @@ real N_int(real t,
         ) {
   real N0[2];     // Initial values
   real par[6];  // Parameters
-  real N[1, 2];   // ODE solution
+  real N[1, 2];   // ODE solution at time t
   // Set initial values. There should be no claims initially
   N0[1] = 0; 
   N0[2] = 0;
@@ -188,18 +187,22 @@ real N_int(real t,
   par[5] = mu_p; 
   par[6] = sigma_p;
   
-  // Solve ODEs
-  N = integrate_ode_rk45(ode_LV, 
-                         y0, 0, rep_array(t, 1), theta,
-                         rep_array(0.0, 0), rep_array(1, 1),
-                         0.001, 0.001, 100); // tolerances, steps
-  // Return relevant population values
-  return N;
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  return N[1];// returns N only
 }
 
-// Integrate ODE to solve for N at a point in time
+// Integrate ODE to solve for N- at a point in time
 real N_neg_int(real t,
-        vector N,
         real U,
         real U_p,
         real mu,
@@ -209,7 +212,7 @@ real N_neg_int(real t,
         ) {
   real N0[2];     // Initial values
   real par[6];  // Parameters
-  real N[1, 2];   // ODE solution
+  real N[1, 2];   // ODE solution at time t
   // Set initial values. There should be no claims initially
   N0[1] = 0; 
   N0[2] = 0;
@@ -221,49 +224,144 @@ real N_neg_int(real t,
   par[5] = mu_p; 
   par[6] = sigma_p;
   
-  // Solve ODEs
-  N_neg = integrate_ode_rk45(ode_LV, 
-                         y0, 0, rep_array(t, 1), theta,
-                         rep_array(0.0, 0), rep_array(1, 1),
-                         0.001, 0.001, 100); // tolerances, steps
-  // Return relevant population values
-  return N_neg;
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  return N[2];// returns N- only
 }
 
 ```
 put this code into a text string and set up a brms formula
 ```{r}
-functions = "vector NZcumul(real t,//time
-             vector NZ,// expected # of non-zero claims at time t. must be a vector so 1d. This is what is being solved for.
-             real U;
-             real U_p;
-             real mu;
-             real sigma;
-             real mu_p;
-             real sigma_p;
+library(brms)
+functions = "// we solve for #>0 at any point in time t  
+vector N_ode(real t,//time
+             vector N,// expected # of non-zero claims and expected # dropping to zero at time t. must be a vector so 2d. This is what is being solved for.
+             real U,
+             real U_p,
+             real mu,
+             real sigma,
+             real mu_p,
+             real sigma_p
              ) {
-    vector[1] dNZdt;
-    dNZdt[1] = U*lognormal_lpdf(t,mu,sigma)-NZ[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);
-    return dNZdt;
+    vector[2] dNdt;
+    dNdt[1] = U*lognormal_lpdf(t,mu,sigma)-N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims >0
+    dNdt[2] = N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);
+    return dNdt;// cumulative # claims dropped back to zero
+}
+// modify signature for calls from the integrator to output N
+real[] N_ode_int(real t, 
+                  real [] N,  // both N and N_neg
+                  real [] theta, // model parameters
+              real [] x_r, int[] x_i
+             ) {
+    real dNdt[2];
+    real U = theta[1];
+    real U_p = theta[2];
+    real mu = theta[3];
+    real sigma = theta[4];
+    real mu = theta[5];
+    real sigma_p = theta[6];
+    
+    dNdt[1] = U*lognormal_lpdf(t,mu,sigma)-N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims >0
+    dNdt[2] = N[1]*U_p*lognormal_lpdf(t,mu_p,sigma_p);// cumulative # claims dropped back to zero
+    return dNdt;
+}
+
+// Integrate ODE to solve for N at a point in time
+real N_int(real t,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution at time t
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  return N[1];// returns N only
+}
+
+// Integrate ODE to solve for N- at a point in time
+real N_neg_int(real t,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution at time t
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  return N[2];// returns N- only
 }"
 
-# we are essentially declaring what the parameters need to be called
+# writing the formula we are essentially declaring what the parameters need to be called
 fm <-  bf(
-  Pelts ~ eta,
-  nlf(eta ~ log(
-    LV(t, Hare0, Lynx0, 
-       brHare, mrHare,brLynx, mrLynx, delta)
-    )
-  ),
-  nlf(Hare0 ~ 10 * exp(stdNHare0)),
-  nlf(Lynx0 ~ 10 * exp(stdNLynx0)),
-  nlf(brHare ~ 0.5 * exp(0.25 * stdNbrHare)),
-  nlf(mrHare ~ 0.025 * exp(0.25 * stdNmrHare)),
-  nlf(brLynx ~ 0.025 * exp(0.25 * stdNbrLynx)),
-  nlf(mrLynx ~ 0.8 * exp(0.25 * stdNmrLynx)),
-  stdNHare0 ~ 1,  stdNLynx0 ~ 1,
-  stdNbrHare ~ 1, stdNmrHare ~ 1,
-  stdNbrLynx ~ 1, stdNmrLynx ~ 1,
-  sigma ~ 0 + Population,
-  nl = TRUE)
+   N_pos_increment ~ log(U) +log_diff_exp( lognormal_lpdf(t,mu,sigma), lognormal_lpdf(tprev,mu,sigma)) ,# std incremental poisson model for N+
+  family = poisson(),
+  nl = TRUE) + bf( N_neg_increment | trials(Nprev) ~ (N_neg_int(t,U,Up,mu,sigma,mup,sigmap)-N_neg_int(tprev,U,Up,mu,sigma,mup,sigmap))/N_int(tprev,U,Up,mu,sigma,mup,sigmap),# approximation
+  family = binomial("identity"),
+  nl = TRUE )+
+  nlf(U~exp(Ustd))+
+  nlf(Up~exp(Upstd))+
+  lf(mu~1)+
+  lf(mup~1)+
+  nlf(sigma~exp(sigmastd))+
+
+  
 ```
