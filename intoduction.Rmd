@@ -127,6 +127,7 @@ Calculating $N(t)$ seems the hardest. We shall approximate $\overline N(t)$ with
 which simplifies to:$$\frac {\partial \overline N}{\partial t}=U.lognormal_{pdf}(t,\mu,\sigma) - \overline N(t).U_p.lognormal_{pdf}(t,\mu_p,\sigma_p)$$
 which contains only continuous numbers and can be solved for in stan using the PDE solver or the numerical integrator.
 
+#### start putting together a model
 
 ```{stan, output.var="odemodel", eval= false}
 
@@ -352,16 +353,77 @@ real N_neg_int(real t,
 
 # writing the formula we are essentially declaring what the parameters need to be called
 fm <-  bf(
-   N_pos_increment ~ log(U) +log_diff_exp( lognormal_lpdf(t,mu,sigma), lognormal_lpdf(tprev,mu,sigma)) ,# std incremental poisson model for N+
+   N_pos_increment ~ log(Upois) +log_diff_exp( lognormal_lccdf(tprev,mupois,sigmapois), lognormal_lccdf(t,mupois,sigmapois)) ,# std incremental poisson model for N+ using lccdf for numerical accuracy in the tail
   family = poisson(),
-  nl = TRUE) + bf( N_neg_increment | trials(Nprev) ~ (N_neg_int(t,U,Up,mu,sigma,mup,sigmap)-N_neg_int(tprev,U,Up,mu,sigma,mup,sigmap))/N_int(tprev,U,Up,mu,sigma,mup,sigmap),# approximation
+  nl = TRUE) + 
+  bf( N_neg_increment | trials(Nprev) ~ (N_neg_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)-N_neg_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))/N_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin),# approximation based on available data
+  nlf(Upois~exp(Upoisstd)),
+  nlf(Ubin~exp(Ubinstd)),
+  nlf(sigmapois~exp(sigmapoisstd)),
+  nlf(sigmabin~exp(sigmabinstd)),
+  mupois~1,
+  mubin~1,
   family = binomial("identity"),
-  nl = TRUE )+
-  nlf(U~exp(Ustd))+
-  nlf(Up~exp(Upstd))+
-  lf(mu~1)+
-  lf(mup~1)+
-  nlf(sigma~exp(sigmastd))+
+  nl = TRUE )
 
-  
+# specify std normal non-centred priors
+mypriors <- c(
+  prior(normal(0, 1), nlpar = "Upoisstd"),
+  prior(normal(0, 1), nlpar = "Ubinstd"),
+  prior(normal(0, 1), nlpar = "sigmapoisstd"),
+  prior(normal(0, 1), nlpar = "sigmabinstd"),
+  prior(normal(0, 1), nlpar = "mupois"),
+  prior(normal(0, 1), nlpar = "mubin"))
+```
+
+#### generate some data
+I try never to use real data initially as I need to confirm that the models can recover parameters as expected and that the synthetic data can be contrived to look like the real world data.
+
+```{r}
+library(dplyr)
+nt = 50 #number of time points
+Upois = 50 # expected ultimate number of claims
+# trial and error with parameters to get the performance of interest
+mupois=2
+sigmapois =1
+Ubin = 2
+mubin = 2.5
+sigmabin=1
+k=10
+standata = data.frame(row = 1:nt,t=1:nt,
+                      tprev = (1:nt) -1)%>%
+                      #N_pos_increment ~ log(Upois) +log_diff_exp( lognormal_lccdf(tprev,mupois,sigmapois), lognormal_lccdf(t,mupois,sigmapois))
+            mutate(
+                      N_pos_increment = rpois(nt,exp(log(Upois) +log( x = 
+                                                                                                                  plnorm(t,mupois,sigmapois)-
+                                                                                                                  plnorm(tprev,mupois,sigmapois)))),
+                      pois_cdf = plnorm(t,mupois,sigmapois),
+                      bin_cdf = plnorm(t,mubin,sigmabin),
+                      
+                        #N_neg_increment | trials(Nprev) ~ (N_neg_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)-N_neg_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))/N_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
+                      p_bin = Ubin*(plnorm(t,mubin,sigmabin)- plnorm(tprev,mubin,sigmabin)),
+                      p_bin_softp = -(log(1+exp(-k*(p_bin-1)))/k -1)
+                      
+            )
+for (i in 1:nt){
+  standata$N_pos[i] = if(i != 1)  standata$N_pos_increment[i]+standata$N_pos[i-1] else standata$N_pos_increment[i]
+  standata$N_neg_increment[i]= if(i != 1)  rbinom(1,standata$N[i-1],standata$p_bin_softp[i]) else 0
+  standata$N_neg[i]= if(i != 1)  standata$N_neg_increment[i] +standata$N_neg[i-1] else standata$N_neg_increment[i]
+  standata$N[i] = if(i != 1)  standata$N_pos_increment[i]-standata$N_neg_increment[i]+standata$N[i-1] else standata$N_pos_increment[i]-standata$N_neg_increment[i]
+}
+
+```
+
+####run the model
+```{r}
+
+mod <- brm(
+  frml, prior = mypriors, 
+  stanvars = stanvar(scode = LotkaVolterra, block = "functions"),
+  data = LH, backend = "cmdstan",
+  family = brmsfamily("lognormal", link_sigma = "log"),
+  control = list(adapt_delta = 0.99),
+  seed = 1234, iter = 1000, 
+  chains = 4, cores = nCores,
+  file = "LotkaVolterraCMDStan.rds")
 ```
