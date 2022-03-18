@@ -995,7 +995,7 @@ real N_int(real t,
   // check gradients can be calculated
   N0[1] = U*exp(lognormal_lpdf(t|mu,sigma))-1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
     N0[2] = 1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
-  print(N0[1],\" \",N0[2]);
+  if(is_nan(N0[1])||is_nan(N0[2])) print(N0[1],\" \",N0[2]);
   // Set initial values. There should be no claims initially
   N0[1] = 0; 
   N0[2] = 0;
@@ -1079,9 +1079,10 @@ real binomsharedpars_lpmf(int Nnegincrement,
     //p= Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)));
     p=N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin);
     if(is_nan(p)==1){
-      //print(t,\" \",Upois,\" \",Ubin,\" \",mupois,\" \",sigmapois,\" \",mubin,\" \",sigmabin);
+      print(t,\" \",Upois,\" \",Ubin,\" \",mupois,\" \",sigmapois,\" \",mubin,\" \",sigmabin);
     } 
-    return binomial_lpmf(Nnegincrement | N+Nnegincrement, min([0.99,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))])]) );
+    //return binomial_lpmf(Nnegincrement | N+Nnegincrement, min([0.99,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))])]) );
+    return poisson_lpmf(N|p);
 
 }
 
@@ -1135,4 +1136,13 @@ model = brm(
   chains = 4, cores = 6
   #file = "frequencyCMDStan3.rds"
   )
+```
+
+now lets visualise the parameters to see how close they were to what we used to generate the data. They won't be a perfect match in any case as the ode method was not used to generate the data, but it should be a good approximation.
+
+```{r}
+devtools::install_github("stan-dev/shinystan", ref = "no-flatly-theme")
+library(shinystan)
+library(brms)
+launch_shinystan(model)
 ```
