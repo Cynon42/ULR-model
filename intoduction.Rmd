@@ -954,8 +954,8 @@ vector N_ode(real t,//time
              real sigma_p
              ) {
     vector[2] dNdt;
-    dNdt[1] = U*lognormal_lpdf(t|mu,sigma)-N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// cumulative # claims >0
-    dNdt[2] = N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);
+    dNdt[1] = exp(log_diff_exp(log(U)+lognormal_lpdf(t|mu,sigma),log(N[1])+log(U_p)+lognormal_lpdf(t|mu_p,sigma_p)));// cumulative # claims >0
+    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));
     return dNdt;// cumulative # claims dropped back to zero
 }
 // modify signature for calls from the integrator to output N
@@ -972,12 +972,12 @@ real[] N_ode_int(real t,
     real mu_p = theta[5];
     real sigma_p = theta[6];
     
-    dNdt[1] = U*lognormal_lpdf(t|mu,sigma)-N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// cumulative # claims >0
-    dNdt[2] = N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// cumulative # claims dropped back to zero
+    dNdt[1] = U*lognormal_lpdf(t|mu,sigma)-N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// gradient of cumulative # claims >0
+    dNdt[2] = N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// gradient of cumulative # claims dropped back to zero
     return dNdt;
 }
 
-// Integrate ODE to solve for N at a point in time
+// Integrate ODE to solve for N at a point in time 
 real N_int(real t,
         real U,
         real U_p,
@@ -1042,7 +1042,7 @@ real N_neg_int(real t,
   
   // Solve ODEs 
   //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
-  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+  N = integrate_ode_rk45(N_ode_int, //function that will receive par as input
                          N0, // N and N- at t=0
                          0.0 , // initial t=0
                          rep_array(t, 1), //array of times at which to find N
@@ -1068,9 +1068,10 @@ real binomsharedpars_lpmf(int Nnegincrement,
                           real sigmapois
                           ){
     real p;
-    p= Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)));
-    p = -(log(1+exp(-10*(p-1)))/10 -1);// use softplus to block approach to 1
-    return binomial_lpmf(Nnegincrement | N + Nnegincrement,p);
+    //p= Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)));
+    p=N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin);
+    if(is_nan(p)==1) print(t);
+    return binomial_lpmf(Nnegincrement | N+Nnegincrement,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))]) );
 
 }
 
@@ -1111,15 +1112,15 @@ mypriors <- c(
 ```
 now run the model again to check things are still working
 ```{r}
-
-model <- brm(
+#testbrms = brm(y~1,data=data.frame(y=rnorm(100,0,2)), backend = "cmdstan")
+model = brm(
   formula,
   prior = mypriors,
   stanvars = stanvar(scode = stan_functions, block = "functions"),
   data = standata, backend = "cmdstan",
   control = list(adapt_delta = 0.99),
   seed = 1234, iter = 1000, 
-  chains = 4, cores = 6,
-  file = "frequencyCMDStan.rds",
-  force_recompile = TRUE)
+  chains = 4, cores = 6
+  #file = "frequencyCMDStan3.rds"
+  )
 ```
