@@ -956,6 +956,7 @@ vector N_ode(real t,//time
     vector[2] dNdt;
     dNdt[1] = exp(log_diff_exp(log(U)+lognormal_lpdf(t|mu,sigma),log(N[1])+log(U_p)+lognormal_lpdf(t|mu_p,sigma_p)));// cumulative # claims >0
     dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));
+    print(dNdt[1],\" \",dNdt[2]);
     return dNdt;// cumulative # claims dropped back to zero
 }
 // modify signature for calls from the integrator to output N
@@ -972,8 +973,8 @@ real[] N_ode_int(real t,
     real mu_p = theta[5];
     real sigma_p = theta[6];
     
-    dNdt[1] = U*lognormal_lpdf(t|mu,sigma)-N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// gradient of cumulative # claims >0
-    dNdt[2] = N[1]*U_p*lognormal_lpdf(t|mu_p,sigma_p);// gradient of cumulative # claims dropped back to zero
+    dNdt[1] = U*exp(lognormal_lpdf(t|mu,sigma))-N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
+    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
     return dNdt;
 }
 
@@ -990,6 +991,11 @@ real N_int(real t,
   real par[6];  // Parameters
   real N[1, 2];   // ODE solution at time t
   real returnpar;
+  
+  // check gradients can be calculated
+  N0[1] = U*exp(lognormal_lpdf(t|mu,sigma))-1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
+    N0[2] = 1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
+  print(N0[1],\" \",N0[2]);
   // Set initial values. There should be no claims initially
   N0[1] = 0; 
   N0[2] = 0;
@@ -1000,6 +1006,8 @@ real N_int(real t,
   par[4] = sigma;
   par[5] = mu_p; 
   par[6] = sigma_p;
+  
+  
   
   // Solve ODEs 
   //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
@@ -1070,8 +1078,10 @@ real binomsharedpars_lpmf(int Nnegincrement,
     real p;
     //p= Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)));
     p=N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin);
-    if(is_nan(p)==1) print(t);
-    return binomial_lpmf(Nnegincrement | N+Nnegincrement,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))]) );
+    if(is_nan(p)==1){
+      //print(t,\" \",Upois,\" \",Ubin,\" \",mupois,\" \",sigmapois,\" \",mubin,\" \",sigmabin);
+    } 
+    return binomial_lpmf(Nnegincrement | N+Nnegincrement, min([0.99,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))])]) );
 
 }
 
@@ -1088,7 +1098,7 @@ and update the formula for the additional information being passed
 formula <-  bf(
    N_pos_increment ~ lambda,
    nlf(lambda ~ log(Upois) +log_diff_exp( lognormal_lccdf_mod(tprev,mupois,sigmapois), lognormal_lccdf_mod(t,mupois,sigmapois)) ),# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail
-   nlf(Upois ~ exp(Upoisstd*log(20)+log(50))),
+   nlf(Upois ~ exp(Upoisstd*log(5)+log(10))),
    mupois~1,
    Upoisstd ~1,
   nlf(sigmapois~exp(sigmapoisstd)),
@@ -1112,6 +1122,7 @@ mypriors <- c(
 ```
 now run the model again to check things are still working
 ```{r}
+library(brms)
 #testbrms = brm(y~1,data=data.frame(y=rnorm(100,0,2)), backend = "cmdstan")
 model = brm(
   formula,
@@ -1119,7 +1130,8 @@ model = brm(
   stanvars = stanvar(scode = stan_functions, block = "functions"),
   data = standata, backend = "cmdstan",
   control = list(adapt_delta = 0.99),
-  seed = 1234, iter = 1000, 
+  #seed = 1234, 
+  iter = 1000, 
   chains = 4, cores = 6
   #file = "frequencyCMDStan3.rds"
   )
