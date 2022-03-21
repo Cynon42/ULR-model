@@ -1170,13 +1170,24 @@ now that we gotr that working, we move to getting a few samples from tidybayes
 ```{r}
 # first have to define the helper function to generate the posterior 
 
+prep_data = prepare_predictions(model) # needed to extract both mv models prep data simultaneously
 posterior_predict_binomsharedpars <- function(i, prep, ...) {
-  p <- get_dpar(model, "p", i = i)
-  return(rpoisson(prep$ndraws,  p))
+  # N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
+  prep_extract <<- prep
+  Ubinom <- brms::get_dpar(prep, "mu", i = i)
+  mubinom <- brms::get_dpar(prep, "mubin", i = i)
+  sigmabinom <- brms::get_dpar(prep, "sigmabin", i = i)
+  mupois <- prep_data$resps$Nposincrement$nlpars$mupois$fe$b[i]
+  sigmapoisstd <- prep_data$resps$Nposincrement$nlpars$sigmapoisstd$fe$b[i]
+  Upoisstd <- prep_data$resps$Nposincrement$nlpars$Upoisstd$fe$b[i]
+  Upois = exp(Upoisstd*log(5)+log(10))
+  sigmapois = exp(sigmapoisstd)
+  t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  rpois(prep$ndraws,N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))
 }
 
 library(tidybayes)
-pred <- predicted_draws(model, newdata = standata, ndraws= 10)
+pred <- predicted_draws(model, newdata = standata, ndraws= 2)
 ggplot(pred, aes(x = Year, y = Pelts)) +
   stat_lineribbon(aes(y = .prediction), 
                   .width = c(.99, .95, .8, .5), 
