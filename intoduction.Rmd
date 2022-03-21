@@ -1131,7 +1131,8 @@ model = brm(
   stanvars = stanvar(scode = stan_functions, block = "functions"),
   data = standata, backend = "cmdstan",
   control = list(adapt_delta = 0.99),
-  #seed = 1234, 
+  seed = 1234,
+  refresh = 0,
   iter = 1000, 
   chains = 4, cores = 6
   #file = "frequencyCMDStan3.rds"
@@ -1146,3 +1147,42 @@ library(shinystan)
 library(brms)
 launch_shinystan(model)
 ```
+
+looking at the parameters, I am sufficiently satisfied to move on and perform some overlay plots.
+
+```{r}
+# we need to recompile using rstan to expose the ODE functions to r so that we can use them to compute N(t)
+
+library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which is quite old but works for this
+library(brms)
+modelRstan = brm(
+  formula,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions, block = "functions"),
+  data = standata, 
+  backend = "rstan",# change to rstan to make use of "expose_functions()"
+  chains = 0, # runs no iterations
+  )
+expose_functions(modelRstan, vectorize = TRUE, cacheDir = "~/ULR-model")
+```
+now that we gotr that working, we move to getting a few samples from tidybayes
+
+```{r}
+# first have to define the helper function to generate the posterior 
+
+posterior_predict_binomsharedpars <- function(i, prep, ...) {
+  p <- get_dpar(model, "p", i = i)
+  return(rpoisson(prep$ndraws,  p))
+}
+
+library(tidybayes)
+pred <- predicted_draws(model, newdata = standata, ndraws= 10)
+ggplot(pred, aes(x = Year, y = Pelts)) +
+  stat_lineribbon(aes(y = .prediction), 
+                  .width = c(.99, .95, .8, .5), 
+                  color = "#08519C") +
+  geom_point(data = pred) + labs(y="Pelts (thousands)") +
+  scale_fill_brewer() + facet_wrap(~ Population)    
+```
+
+
