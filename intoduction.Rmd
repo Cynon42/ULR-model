@@ -1189,26 +1189,28 @@ prep_data = prepare_predictions(model) # needed to extract both mv models prep d
 posterior_predict_binomsharedpars <- function(i, prep, ...) {
   # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
   # this is the current, most basic, approximate method for generating an estimate of N. 
+  
   Ubinom <- brms::get_dpar(prep, "mu", i = i)
   mubinom <- brms::get_dpar(prep, "mubin", i = i)
   sigmabinom <- brms::get_dpar(prep, "sigmabin", i = i)
-  mupois <- prep_data$resps$Nposincrement$nlpars$mupois$fe$b[i]
-  sigmapoisstd <- prep_data$resps$Nposincrement$nlpars$sigmapoisstd$fe$b[i]
-  Upoisstd <- prep_data$resps$Nposincrement$nlpars$Upoisstd$fe$b[i]
+  mupois <- prep_data$resps$Nposincrement$nlpars$mupois$fe$b
+  sigmapoisstd <- prep_data$resps$Nposincrement$nlpars$sigmapoisstd$fe$b
+  Upoisstd <- prep_data$resps$Nposincrement$nlpars$Upoisstd$fe$b
   Upois = exp(Upoisstd*0.3+4)
   sigmapois = exp(sigmapoisstd+1)
   t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
-  rpois(prep$ndraws,N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))
+  for (j in 1:prep$ndraws){
+    N_est[j] = N_int(t,Upois[j],Ubinom[j],mupois[j],sigmapois[j],mubinom[j],sigmabinom[j])
+  }
+  
+  rpois(prep$ndraws,N_est)
 }
 
-
-Upoisstd_test <- prep_data$resps$Nposincrement$nlpars$Upoisstd$fe$b
-  Upois_test = exp(Upoisstd_test*0.3+4)
 library(tidybayes)
 library(plotly)
 library(ggplot2)
 library(patchwork)
-pred <- predicted_draws(model, newdata = standata, ndraws= 1000)
+pred <- predicted_draws(model, newdata = standata)
 
 
 N_plot = pred%>%filter(.category=="Nnegincrement")%>%
