@@ -402,10 +402,10 @@ nt = 50 #number of time points
 Upois = 50 # expected ultimate number of claims
 # trial and error with parameters to get the performance of interest
 mupois=2
-sigmapois =1
+sigmapois =0.7
 Ubin = 2
 mubin = 2.5
-sigmabin=0.8
+sigmabin=0.5
 k=10
 standata = data.frame(row = 1:nt,t=1:nt,
                       tprev = (1:nt) -1)%>%
@@ -921,8 +921,12 @@ real lognormal_lccdf_mod(real a,real b,real c){
 
 "
 ```
- this worked byut it would be better if the n in the binomial distribution was Nprev + Nposincrement as this is strictly the maximum number of Nnegicrement claims in a period.
+ this worked but it would be better if the n in the binomial distribution was Nprev + Nposincrement as this is strictly the maximum number of Nnegicrement claims in a period.
+  
   We also are not using the ode solver at this stage, so we will need to import the additional data to solve that including N.
+  
+# Define a family
+adding a new statistical family definition in order to pass the needed variables across between the models
 
 ```{r}
 # nlp_Nnegincrement_Ubin[n] naming conventions
@@ -941,7 +945,9 @@ binomsharedpars <- custom_family(
                              ) 
               )
 ```
-and now modify the functions to accept the updated family
+
+# modify functions 
+and now modify the functions for the family definition and solve ODE
 ```{r}
 stan_functions = "// we solve for #>0 at any point in time t  
 vector N_ode(real t,//time
@@ -1093,16 +1099,17 @@ real lognormal_lccdf_mod(real a,real b,real c){
 
 "
 ```
+# Update Formula
 and update the formula for the additional information being passed
 ```{r}
 # writing the formula we are essentially declaring what the parameters need to be called
 formula <-  bf(
    N_pos_increment ~ lambda,
    nlf(lambda ~ log(Upois) +log_diff_exp( lognormal_lccdf_mod(tprev,mupois,sigmapois), lognormal_lccdf_mod(t,mupois,sigmapois)) ),# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail
-   nlf(Upois ~ exp(Upoisstd*log(5)+log(10))),
+   nlf(Upois ~ exp(Upoisstd*0.3+4)),
    mupois~1,
    Upoisstd ~1,
-  nlf(sigmapois~exp(sigmapoisstd)),
+  nlf(sigmapois~exp(sigmapoisstd+1)),
   sigmapoisstd~1,
   family = poisson(),
   nl=TRUE)+
@@ -1117,10 +1124,12 @@ mypriors <- c(
   #prior(normal(0, 1), resp = "Nnegincrement",dpar = "mu"),
   prior(normal(0, 1), resp = "Nposincrement",nlpar = "sigmapoisstd"),
   prior(normal(0, 1), class = "Intercept",resp = "Nnegincrement",dpar = "sigmabin"),
-  prior(normal(0, 1), resp = "Nposincrement",nlpar = "mupois"),
+  prior(normal(2, 2), resp = "Nposincrement",nlpar = "mupois"),
   prior(normal(0, 1), class = "Intercept",resp = "Nnegincrement",dpar = "mubin")
   )
 ```
+
+# run updated model
 now run the model again to check things are still working
 ```{r}
 library(brms)
@@ -1129,7 +1138,8 @@ model = brm(
   formula,
   prior = mypriors,
   stanvars = stanvar(scode = stan_functions, block = "functions"),
-  data = standata, backend = "cmdstan",
+  data = standata, 
+  backend = "cmdstan",
   control = list(adapt_delta = 0.99),
   seed = 1234,
   refresh = 0,
@@ -1138,6 +1148,8 @@ model = brm(
   #file = "frequencyCMDStan3.rds"
   )
 ```
+
+# visualise with shinystan
 
 now lets visualise the parameters to see how close they were to what we used to generate the data. They won't be a perfect match in any case as the ode method was not used to generate the data, but it should be a good approximation.
 
@@ -1149,6 +1161,8 @@ launch_shinystan(model)
 ```
 
 looking at the parameters, I am sufficiently satisfied to move on and perform some overlay plots.
+
+# expose functions
 
 ```{r}
 # we need to recompile using rstan to expose the ODE functions to r so that we can use them to compute N(t)
@@ -1165,7 +1179,8 @@ modelRstan = brm(
   )
 expose_functions(modelRstan, vectorize = TRUE, cacheDir = "~/ULR-model")
 ```
-now that we gotr that working, we move to getting a few samples from tidybayes
+# sample posterior
+now that we got that working, we move to getting a few samples from tidybayes
 
 ```{r}
 # first have to define the helper function to generate the posterior 
@@ -1174,27 +1189,43 @@ prep_data = prepare_predictions(model) # needed to extract both mv models prep d
 posterior_predict_binomsharedpars <- function(i, prep, ...) {
   # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
   # this is the current, most basic, approximate method for generating an estimate of N. 
-  prep_extract <<- prep
   Ubinom <- brms::get_dpar(prep, "mu", i = i)
   mubinom <- brms::get_dpar(prep, "mubin", i = i)
   sigmabinom <- brms::get_dpar(prep, "sigmabin", i = i)
   mupois <- prep_data$resps$Nposincrement$nlpars$mupois$fe$b[i]
   sigmapoisstd <- prep_data$resps$Nposincrement$nlpars$sigmapoisstd$fe$b[i]
   Upoisstd <- prep_data$resps$Nposincrement$nlpars$Upoisstd$fe$b[i]
-  Upois = exp(Upoisstd*log(5)+log(10))
-  sigmapois = exp(sigmapoisstd)
+  Upois = exp(Upoisstd*0.3+4)
+  sigmapois = exp(sigmapoisstd+1)
   t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
   rpois(prep$ndraws,N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))
 }
 
-library(tidybayes)
-pred <- predicted_draws(model, newdata = standata, ndraws= 2)
-ggplot(pred, aes(x = Year, y = Pelts)) +
-  stat_lineribbon(aes(y = .prediction), 
-                  .width = c(.99, .95, .8, .5), 
-                  color = "#08519C") +
-  geom_point(data = pred) + labs(y="Pelts (thousands)") +
-  scale_fill_brewer() + facet_wrap(~ Population)    
-```
 
+Upoisstd_test <- prep_data$resps$Nposincrement$nlpars$Upoisstd$fe$b
+  Upois_test = exp(Upoisstd_test*0.3+4)
+library(tidybayes)
+library(plotly)
+library(ggplot2)
+library(patchwork)
+pred <- predicted_draws(model, newdata = standata, ndraws= 1000)
+
+
+N_plot = pred%>%filter(.category=="Nnegincrement")%>%
+   ggplot(aes(x = t, y = .prediction)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+ geom_point(data = pred%>%filter(.category=="Nnegincrement"), aes(t, N))
+
+N_pos_plot = pred%>%filter(.category=="Nposincrement")%>%
+  group_by(.draw)%>%
+  mutate(N_pos_cum_sample = cumsum(.prediction))%>%ungroup()%>%
+   ggplot(aes(x = t, y = N_pos_cum_sample)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+ geom_point(data = standata, aes(t, N_pos))
+
+N_plot + N_pos_plot
+```
+The overlay plots show that the model is following the data, but not fantastiacally well. At this point I realised that my priors did not cover the parameters that I selected very well and, after checking the development pattern I saw that the choices I made when I generated the data weren't great, with much of the development still to be expected after month 50, which is not realistic. So I went back and chose what I thought were better parameters for the synthetic data. So the charts above are the result of improved synthetic data choices where development has halted by month 50 for both the binomial and poisson rate curves.
 
