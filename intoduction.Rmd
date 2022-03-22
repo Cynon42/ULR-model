@@ -1229,5 +1229,6 @@ N_pos_plot = pred%>%filter(.category=="Nposincrement")%>%
 
 N_plot + N_pos_plot
 ```
-The overlay plots show that the model is following the data, but not fantastiacally well. At this point I realised that my priors did not cover the parameters that I selected very well and, after checking the development pattern I saw that the choices I made when I generated the data weren't great, with much of the development still to be expected after month 50, which is not realistic. So I went back and chose what I thought were better parameters for the synthetic data. So the charts above are the result of improved synthetic data choices where development has halted by month 50 for both the binomial and poisson rate curves.
+The overlay plots show that the model is following the data, but not fantastically well initially. At this point I realised that my priors did not cover the parameters that I selected very well and, after checking the development pattern I saw that the choices I made when I generated the data weren't great, with much of the development still to be expected after month 50, which is not realistic. So I went back and chose what I thought were better parameters for the synthetic data. So the charts above are the result of improved synthetic data choices where development has halted by month 50 for both the binomial and poisson rate curves.
 
+After an additional bug fix in predicted draws, the charts now look as they should. We can now move on to modelling real world data.
