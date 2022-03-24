@@ -1209,7 +1209,7 @@ posterior_predict_binomsharedpars <- function(i, prep, ...) {
 library(tidybayes)
 library(plotly)
 library(ggplot2)
-library(patchwork)
+library(patchwork)# allows for the side by side charting process that you see below
 pred <- predicted_draws(model, newdata = standata)
 
 
@@ -1231,4 +1231,12 @@ N_plot + N_pos_plot
 ```
 The overlay plots show that the model is following the data, but not fantastically well initially. At this point I realised that my priors did not cover the parameters that I selected very well and, after checking the development pattern I saw that the choices I made when I generated the data weren't great, with much of the development still to be expected after month 50, which is not realistic. So I went back and chose what I thought were better parameters for the synthetic data. So the charts above are the result of improved synthetic data choices where development has halted by month 50 for both the binomial and poisson rate curves.
 
-After an additional bug fix in predicted draws, the charts now look as they should. We can now move on to modelling real world data.
+After an additional bug fix in predicted draws, the charts now look as they should. We can now move on to modelling real world data. So we conclude this chapter of the process as the real world data cannot be shared here.
+
+# Conclusion
+
+It is possible to construct an ODE model that can treat for negative IBNR (Incurred but not reported) claim count data. This treatment using a combination of Poisson and Binomial or just Poisson distributions can reasonably infer expected claim count development patterns when there are two competing processes to contend with: The first process is that of reporting claims and the second, where claims are rejected or fall below deductible and close with no payment.
+
+This type of model is useful for claims reserving and pricing in the insurance sector and can be extended in several key ways using the BRMS/stan modelling architecture.
+
+In the next section we will apply this model to a multi-level model to solve for a standard triangulation exercise.
