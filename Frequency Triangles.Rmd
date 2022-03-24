@@ -1,0 +1,19 @@
+---
+title: "Claim Count Triangles"
+author: "Cy Sonkkila"
+date: '2022-03-24'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## working with claims triangles
+
+we are now going to introduce a synthetic claims triangle, and then attempt to solve for some real(ish) data.
+
+Using the methods developed in the introduction, we synthesize several years of data. Then cut off that data at various maturity levels, consistent with standard insurance claim development. In the case here where we are assuming monthly information and a maximum development time of something like 5 years, we will have examples where over a 10 year period the earliest years will have 120 months of development, but the most recent year might have only 12, or even no development data at all (i.e. a prediction for a policy year that has not incepted yet).
+
+
+
