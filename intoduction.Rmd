@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 here we try to combine a frequency and average ckaim size model into an incurred model. we observe that there is a rate at which claims are transitioning back to zero. our intention is to model net non-zero claims above some very low threshold.
 
-```{r installbrms}
+```{r installbrms, eval=FALSE}
 library(devtools)
 remove.packages(c("StanHeaders", "rstan"))
 ##install_github("hsbadr/rstan/StanHeaders@develop")
@@ -24,7 +24,7 @@ install_github("paul-buerkner/brms",dependencies = TRUE)
 ```
 ## cmdstanr install
 
-```{r installcmdstanr, echo = FALSE}
+```{r installcmdstanr, echo = FALSE, eval=FALSE}
 
 # this code chunk is made redundant by the installation of the github versions on BRMS and cmdstanr into the docker image.
 # see the "Dockerfile"
@@ -53,7 +53,7 @@ fit <- mod$sample(
 ```
 ## set cmdstan to build models in the background
 
-```{r cmdstanparser}
+```{r cmdstanparser, eval=FALSE}
 library(cmdstanr)
 
 register_knitr_engine()
@@ -65,7 +65,7 @@ after looking into the problem further, it might be smart to set it up as an ODE
 ### example
 the example below is from the stan documentation. the syntax of the functions has changed recently, making it harder to just use what in on the internet. A great example from the older syntax is from Marcus Gessman on mages blog [mages blog ](https://magesblog.com/post/2021-02-08-fitting-multivariate-ode-models-with-brms/).
 
-```{stan, output.var="testmodel"}
+```{stan, output.var="testmodel", eval=FALSE}
 functions {
   vector sho(real t,
              vector y,
@@ -129,7 +129,7 @@ which contains only continuous numbers and can be solved for in stan using the P
 
 #### start putting together a model
 
-```{stan, output.var="odemodel", eval= false}
+```{stan, output.var="odemodel", eval= FALSE}
 
   // we solve for #>0 at any point in time t  
 vector N_ode(real t,//time
@@ -368,7 +368,7 @@ formula <-  bf(
   sigmapoisstd~1,
   family = poisson(),
   nl=TRUE)+
-  bf(N_neg_increment | vint(Nprev) ~ pbinom , nlf(pbinom~(N_neg_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)-N_neg_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))/N_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)),# approximation based on available data
+  bf(N_neg_increment | trials(Nprev) ~ pbinom , nlf(pbinom~(N_neg_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)-N_neg_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin))/N_int(tprev,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)),# approximation based on available data
   # unfortunately the line above doesn't work as parameters cannot be shared between the poisson and binomial model within the brms syntax. so we must add it manually unfortunately
      nlf(Ubin~exp(Ubinstd)),
   nlf(sigmabin~exp(sigmabinstd)),
@@ -447,7 +447,7 @@ model <- brm(
   chains = 4, cores = 6,
   file = "frequencyCMDStan.rds")
 ```
-ok. it turns out that there is no easy way to share the poisson model parameters with the binomial model in a way that I can see without modifying the stan code directly...
+ok. An error. it turns out that there is no easy way to share the poisson model parameters with the binomial model in a way that I can see without modifying the stan code directly...
 
 Easiest way is to write my own family for the binomial section that pulls in the other shared parameters.
 ```{r}
@@ -469,7 +469,7 @@ binomsharedpars <- custom_family(
 
 now we need to modify the functions section further to include the required functions to calculate the loglikelihood for the new family
 
-```{stan,eval=false,echo=false}
+```{stan,eval=FALSE, output.var = "test_code"}
 // we solve for #>0 at any point in time t  
 vector N_ode(real t,//time
              vector N,// expected # of non-zero claims and expected # dropping to zero at time t. must be a vector so 2d. This is what is being solved for.
@@ -1153,7 +1153,7 @@ model = brm(
 
 now lets visualise the parameters to see how close they were to what we used to generate the data. They won't be a perfect match in any case as the ode method was not used to generate the data, but it should be a good approximation.
 
-```{r}
+```{r,eval = FALSE}
 devtools::install_github("stan-dev/shinystan", ref = "no-flatly-theme")
 library(shinystan)
 library(brms)
@@ -1199,6 +1199,7 @@ posterior_predict_binomsharedpars <- function(i, prep, ...) {
   Upois = exp(Upoisstd*0.3+4)
   sigmapois = exp(sigmapoisstd+1)
   t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  N_est = c()
   for (j in 1:prep$ndraws){
     N_est[j] = N_int(t,Upois[j],Ubinom[j],mupois[j],sigmapois[j],mubinom[j],sigmabinom[j])
   }
