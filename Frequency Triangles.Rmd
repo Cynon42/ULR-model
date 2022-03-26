@@ -15,7 +15,7 @@ we are now going to introduce a synthetic claims triangle, and then attempt to s
 
 Using the methods developed in the introduction, we synthesize several years of data. Then cut off that data at various maturity levels, consistent with standard insurance claim development. In the case here where we are assuming monthly information and a maximum development time of something like 5 years, we will have examples where over a 10 year period the earliest years will have 120 months of development, but the most recent year might have only 12, or even no development data at all (i.e. a prediction for a policy year that has not incepted yet).
 
-original family
+# The original family
 ```{r}
 # nlp_Nnegincrement_Ubin[n] naming conventions
 library(brms)
@@ -34,7 +34,7 @@ binomsharedpars <- custom_family(
               )
 ```
 
-# Original formula
+# A basic formula
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
@@ -64,7 +64,7 @@ mypriors <- c(
   )
 ```
 
-# original functions
+# The functions including error trapping
 ```{r}
 stan_functions = "// we solve for #>0 at any point in time t  
 vector N_ode(real t,//time
@@ -226,8 +226,11 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
 
 "
 ```
+Many of the error comments when stan is running will refer to the line of the code that gave the error. It is therefore useful to extract the stancode to inspect and identify the bug. In this case it was a data error that needed tracking down. Claims were being identified at t=0, which is not permitted by the structure of the model.
 
-# original working brms call
+You can see the addition of print statements and the modification of the poisson lccdf function calls to include error trapping.
+
+# A brms call 
 ```{r}
 
 model_triangles = brm(
@@ -247,7 +250,9 @@ model_triangles = brm(
   )
 ```
 
-#strictly the same but with only one family used
+# Introduce a new family such that there is only one loglikelihood
+
+having trouble with the complexity so I have to move in smaller steps. This is to introduce a single loglikelihood statement into stan using a new family definition. This will allow for parallel execution of the code.
 
 ```{r}
 
@@ -264,7 +269,7 @@ sharedpars_test <- custom_family(
               )
 ```
 
-# new formula
+# A new formula
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
@@ -289,7 +294,7 @@ mypriors <- c(
   )
 ```
 
-#new functions
+# Modified functions
 ```{r}
 stan_functions = "// we solve for #>0 at any point in time t  
 vector N_ode(real t,//time
@@ -454,7 +459,7 @@ real lognormal_lccdf_mod(real a,real b,real c){
 "
 ```
 
-# new brms call
+# A matching brms call
 ```{r}
 
 model_triangles_single_family = brm(
@@ -476,7 +481,7 @@ model_triangles_single_family = brm(
 
 Now we have a version running with multithreading
 
-# Now adding support for exposure
+# Adding support for exposure
 
 ```{r}
 
@@ -493,8 +498,13 @@ sharedpars_exposure <- custom_family(
                              ) 
               )
 ```
+exposure is added to the vars section and in the matching formula below. THis allows the poisson base rate to be a strict multiplier of exposure if desired.
+
+We also discover that exposure has accidentally been set to zero for one segment in one year. This year has to be removed from the data unfortunately.
 
 # formula with exposure
+The formula can now be made more versatile to account for trending in development patterns.
+
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
@@ -607,7 +617,7 @@ real sharedpars_exposure_lpmf(int Nnegincrement,
                           real exposure
                           ){
 
-    return poisson_lpmf(N|N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_lpmf(N|exp(log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois))));
+    return poisson_lpmf(N|N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_log_lpmf(N|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois)));
 
 }
 
@@ -622,6 +632,7 @@ real lognormal_lccdf_mod(real a,real b,real c){
 ```
 
 # extract stancode
+this is to aid in debugging
 ```{r}
 library(brms)
 #testbrms = brm(y~1,data=data.frame(y=rnorm(100,0,2)), backend = "cmdstan")
@@ -635,7 +646,7 @@ stancode_exposure = make_stancode(formula_exposure,
   backend = "cmdstan")
 ```
 
-# brms call with exposure
+# brms call with exposure and trending
 ```{r}
 
 model_triangles_exposure = brm(
@@ -648,7 +659,7 @@ model_triangles_exposure = brm(
   control = list(adapt_delta = 0.99),
   seed = 1234,
   refresh = 1,
-  iter = 2, 
+  iter = 20, 
   init = 0,
   chains = 1, cores = 6
   #file = "frequencyCMDStan3.rds"
@@ -656,216 +667,6 @@ model_triangles_exposure = brm(
 ```
 
 
-# the updated version that is not working
-
-```{r}
-
-# writing the formula for the model making use of time and segmentation of the data
-formula <-  bf(
-   N_pos_increment ~ lambda,
-   nlf(lambda ~ log(Upois) + logdifffunction(t,tprev,mupois,sigmapois) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail
-   nlf(Upois ~ exp(Upoisstd*2+7)),
-   mupois~ 0 + (1 + year+year^2|id|segment),
-   Upoisstd ~0 + (1 + year+year^2|id|segment),
-  nlf(sigmapois~exp(sigmapoisstd+1)),
-  sigmapoisstd~0 + (1 + year+year^2|id|segment),
-  family = poisson(),
-  nl=TRUE)+
-  bf(N_neg_increment | vint(Nprev,N)+vreal(t,tprev) ~ 0 + (1 + year+year^2|id2|segment) ,
-     mubin~0 + (1 + year+year^2|id2|segment),
-     sigmabin~0 + (1 + year+year^2|id2|segment),
-     family = binomsharedpars)
-
-# specify std normal non-centred priors
-mypriors <- c(
-  #prior(normal(0, 1),resp = "Nposincrement", nlpar = "Upoisstd"),
-  #prior(normal(0, 1), resp = "Nnegincrement",dpar = "mu"),
-  #prior(normal(0, 1), resp = "Nposincrement",nlpar = "sigmapoisstd"),
-  #prior(normal(0, 1), class = "Intercept",resp = "Nnegincrement",dpar = "sigmabin"),
-  #prior(normal(2, 2), resp = "Nposincrement",nlpar = "mupois"),
-  #prior(normal(0, 1), class = "Intercept",resp = "Nnegincrement",dpar = "mubin")
-  )
-```
-
-add the functions as some tweaking is required for error trapping
-```{r}
-stan_functions = "// we solve for #>0 at any point in time t  
-vector N_ode(real t,//time
-             vector N,// expected # of non-zero claims and expected # dropping to zero at time t. must be a vector so 2d. This is what is being solved for.
-             real U,
-             real U_p,
-             real mu,
-             real sigma,
-             real mu_p,
-             real sigma_p
-             ) {
-    vector[2] dNdt;
-    dNdt[1] = exp(log_diff_exp(log(U)+lognormal_lpdf(t|mu,sigma),log(N[1])+log(U_p)+lognormal_lpdf(t|mu_p,sigma_p)));// cumulative # claims >0
-    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));
-    print(dNdt[1],\" \",dNdt[2]);
-    return dNdt;// cumulative # claims dropped back to zero
-}
-// modify signature for calls from the integrator to output N
-real[] N_ode_int(real t, 
-                  real [] N,  // both N and N_neg
-                  real [] theta, // model parameters
-              real [] x_r, int[] x_i
-             ) {
-    real dNdt[2];
-    real U = theta[1];
-    real U_p = theta[2];
-    real mu = theta[3];
-    real sigma = theta[4];
-    real mu_p = theta[5];
-    real sigma_p = theta[6];
-    
-    dNdt[1] = U*exp(lognormal_lpdf(t|mu,sigma))-N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
-    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
-    return dNdt;
-}
-
-// Integrate ODE to solve for N at a point in time 
-real N_int(real t,
-        real U,
-        real U_p,
-        real mu,
-        real sigma,
-        real mu_p,
-        real sigma_p
-        ) {
-  real N0[2];     // Initial values
-  real par[6];  // Parameters
-  real N[1, 2];   // ODE solution at time t
-  real returnpar;
-  
-  // check gradients can be calculated
-  N0[1] = U*exp(lognormal_lpdf(t|mu,sigma))-1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
-    N0[2] = 1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
-  if(is_nan(N0[1])||is_nan(N0[2])) print(N0[1],\" \",N0[2]);
-  // Set initial values. There should be no claims initially
-  N0[1] = 0; 
-  N0[2] = 0;
-  // Set parameters
-  par[1] = U;
-  par[2] = U_p;
-  par[3] = mu; 
-  par[4] = sigma;
-  par[5] = mu_p; 
-  par[6] = sigma_p;
-  
-  
-  
-  // Solve ODEs 
-  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
-  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
-                         N0, // N and N- at t=0
-                         0.0, // initial t=0
-                         rep_array(t, 1), //array of times at which to find N
-                         par,// set of parameters for ode function
-                         rep_array(0.0, 0), // not needed real data
-                         rep_array(1, 1),// not needed int data
-                         1e-6, 1e-5, 1e3); // max steps
-  // Return relevant values
-  returnpar = N[1,1];// returns N only
-  return returnpar;
-}
-
-// Integrate ODE to solve for N- at a point in time
-real N_neg_int(real t,
-        real U,
-        real U_p,
-        real mu,
-        real sigma,
-        real mu_p,
-        real sigma_p
-        ) {
-  real N0[2];     // Initial values
-  real par[6];  // Parameters
-  real N[1, 2];   // ODE solution at time t
-  real returnpar;
-  // Set initial values. There should be no claims initially
-  N0[1] = 0; 
-  N0[2] = 0;
-  // Set parameters
-  par[1] = U;
-  par[2] = U_p;
-  par[3] = mu; 
-  par[4] = sigma;
-  par[5] = mu_p; 
-  par[6] = sigma_p;
-  
-  // Solve ODEs 
-  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
-  N = integrate_ode_rk45(N_ode_int, //function that will receive par as input
-                         N0, // N and N- at t=0
-                         0.0 , // initial t=0
-                         rep_array(t, 1), //array of times at which to find N
-                         par,// set of parameters for ode function
-                         rep_array(0.0, 0), // not needed real data
-                         rep_array(1, 1),// not needed int data
-                         1e-6, 1e-5, 1e3); // max steps
-  // Return relevant values
-  returnpar = N[1,2];// returns N- only
-  return returnpar;
-}
-
-real sharedpars_lpmf(int Nnegincrement,
-                          real Ubin,
-                          real mubin,
-                          real sigmabin,
-                          int Nprev,
-                          int N,
-                          real t,
-                          real tprev,
-                          real Upois,
-                          real mupois,
-                          real sigmapois
-                          ){
-    real p;
-    //p= Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)));
-    p=fmax(1e-20,N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin));
-    if(is_nan(p)==1){
-      print(t,\" \",Upois,\" \",Ubin,\" \",mupois,\" \",sigmapois,\" \",mubin,\" \",sigmabin);
-      p= 1e-20; //error trap for some extreme initial conditions
-    } 
-    //return binomial_lpmf(Nnegincrement | N+Nnegincrement, min([0.99,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))])]) );
-    return poisson_lpmf(N|p);
-
-}
-
-
-real lognormal_lccdf_mod(real a,real b,real c){
-  return lognormal_lccdf(a|b,c);
-}
-
-real logdifffunction(real t,real tprev,real mu,real sigma){
-  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
-  if(is_nan(lambda)) {
-    print(t,\" \",tprev,\" \",mu,\" \",sigma);
-    lambda = -350;
-  }
-  return lambda;
-}
-
-"
-```
-
-some code to help with debugging
-
-```{r}
-library(brms)
-#testbrms = brm(y~1,data=data.frame(y=rnorm(100,0,2)), backend = "cmdstan")
-triangles_priors = get_prior(formula,stanvars = stanvar(scode = stan_functions, block = "functions"),data = stan_data_multisegment)
-
-stancode = make_stancode(formula,
-  prior = mypriors,
-  stanvars = stanvar(scode = stan_functions, block = "functions"),
-  data = stan_data_multisegment, 
-  backend = "cmdstan")
-```
-Many of the error comments when stan is running will refer to the line of the code that gave the error. It is therefore useful to extract the stancode to inspect and identify the bug. In this case it was a data error that needed tracking down. Claims were being identified at t=0, which is not permitted by the structure of the model.
-
-You can see the addition of print statements and the modification of the poisson lccdf function calls to include error trapping.
 
 run corrected model
 ```{r}
