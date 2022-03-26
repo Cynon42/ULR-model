@@ -476,6 +476,184 @@ model_triangles_single_family = brm(
 
 Now we have a version running with multithreading
 
+# Now adding support for exposure
+
+```{r}
+
+library(brms)
+sharedpars_exposure <- custom_family(
+                    "sharedpars_exposure", dpars = c("mu","mubin","sigmabin","Upois","mupois","sigmapois"), # actually mu is really the Ubin for the binomial 
+                    links = c("log","identity","log","identity","identity","log"),
+                    type = "int",# lpmf vs lpdf
+                    vars = c("vint1[n]", # Nprev
+                             "vint2[n]", # N
+                             "vreal1[n]",# t
+                             "vreal2[n]",# tprev
+                             "vreal3[n]"# exposure
+                             ) 
+              )
+```
+
+# formula with exposure
+```{r}
+library(brms)
+# writing the formula for the model making use of time and segmentation of the data
+formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1 + year + year^2|id|segment),
+     mubin~(1 + year + year^2|id|segment),
+     sigmabin~(1 + year + year^2|id|segment),
+     nlf(Upois ~ exp(Upoisstd*2+5)),
+     mupois~ (1 + year + year^2|id|segment),
+     Upoisstd ~(1 + year + year^2 + log(exposure/1e7)|id|segment) ,
+     nlf(sigmapois~exp(sigmapoisstd)),
+     sigmapoisstd~(1 + year + year^2|id|segment),
+     family = sharedpars_exposure)
+
+# specify std normal non-centred priors
+mypriors <- c(
+  prior(normal(0, 1), class = "b", nlpar = "Upoisstd"),
+  #prior(normal(0, 1), dpar = "mu"),
+  prior(normal(0, 1), class = "b", nlpar = "sigmapoisstd"),
+  prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
+  prior(normal(2, 2), class = "Intercept", dpar = "mupois"),
+  prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  )
+```
+
+# functions with exposure
+```{r}
+stan_functions_exposure = "// we solve for #>0 at any point in time t  
+
+// modify signature for calls from the integrator to output N
+real[] N_ode_int(real t, 
+                  real [] N,  // both N and N_neg
+                  real [] theta, // model parameters
+              real [] x_r, int[] x_i
+             ) {
+    real dNdt[2];
+    real U = theta[1];
+    real U_p = theta[2];
+    real mu = theta[3];
+    real sigma = theta[4];
+    real mu_p = theta[5];
+    real sigma_p = theta[6];
+    
+    dNdt[1] = U*exp(lognormal_lpdf(t|mu,sigma))-N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
+    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
+    return dNdt;
+}
+
+// Integrate ODE to solve for N at a point in time 
+real N_int(real t,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution at time t
+  real returnpar;
+  
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  
+  
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0.0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  returnpar = N[1,1];// returns N only
+  return returnpar;
+}
+
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+  if(is_nan(lambda)) {
+    print(t,\" \",tprev,\" \",mu,\" \",sigma);
+    lambda = -350;
+  }
+  return lambda;
+}
+
+real sharedpars_exposure_lpmf(int Nnegincrement,
+                          real Ubin,
+                          real mubin,
+                          real sigmabin,
+                          real Upois,
+                          real mupois,
+                          real sigmapois,
+                          int Nprev,
+                          int N,
+                          real t,
+                          real tprev,
+                          real exposure
+                          ){
+
+    return poisson_lpmf(N|N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_lpmf(N|exp(log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois))));
+
+}
+
+
+real lognormal_lccdf_mod(real a,real b,real c){
+  return lognormal_lccdf(a|b,c);
+}
+
+
+
+"
+```
+
+# extract stancode
+```{r}
+library(brms)
+#testbrms = brm(y~1,data=data.frame(y=rnorm(100,0,2)), backend = "cmdstan")
+triangles_exposure_priors = get_prior(formula_exposure,stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),data = stan_data_multisegment)
+
+stancode_exposure = make_stancode(formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
+  data = stan_data_multisegment, 
+  threads = threading(6),
+  backend = "cmdstan")
+```
+
+# brms call with exposure
+```{r}
+
+model_triangles_exposure = brm(
+  formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
+  data = stan_data_multisegment, 
+  backend = "cmdstan",
+  threads = threading(6),
+  control = list(adapt_delta = 0.99),
+  seed = 1234,
+  refresh = 1,
+  iter = 2, 
+  init = 0,
+  chains = 1, cores = 6
+  #file = "frequencyCMDStan3.rds"
+  )
+```
 
 
 # the updated version that is not working
