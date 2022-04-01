@@ -425,7 +425,7 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
   return lambda;
 }
 
-real sharedpars_test_lpmf(int Nnegincrement,
+real sharedpars_test_lpmf(int Nposincrement,
                           real Ubin,
                           real mubin,
                           real sigmabin,
@@ -445,7 +445,7 @@ real sharedpars_test_lpmf(int Nnegincrement,
       p= 1e-20; //error trap for some extreme initial conditions
     } 
     //return binomial_lpmf(Nnegincrement | N+Nnegincrement, min([0.99,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))])]) );
-    return poisson_lpmf(N|p) + poisson_lpmf(N|exp(log(Upois) + logdifffunction(t,tprev,mupois,sigmapois)));
+    return poisson_lpmf(N|p) + poisson_lpmf(Nposincrement|exp(log(Upois) + logdifffunction(t,tprev,mupois,sigmapois)));
 
 }
 
@@ -487,7 +487,7 @@ Now we have a version running with multithreading
 
 library(brms)
 sharedpars_exposure <- custom_family(
-                    "sharedpars_exposure", dpars = c("mu","mupois","sigmapois","Ubin","mubin","sigmabin"), # actually mu is really the Upois for the poisson 
+                    "sharedpars_exposure", dpars = c("mu","mubin","sigmabin","Upois","mupois","sigmapois"), # actually mu is really the Ubin for the binomial 
                     links = c("log","identity","log","identity","identity","identity"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
@@ -508,24 +508,24 @@ The formula can now be made more versatile to account for trending in developmen
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
-formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|id|segment) +(1|id2|year_segment),
-     mupois~(1|id|segment) +(1|id2|year_segment),
-     sigmapois~(1|id|segment) +(1|id2|year_segment),
-     nlf(Ubin ~ exp(Ubinstd),loop=FALSE),
-     mubin~ (1|id|segment) +(1|id2|year_segment),
-     Ubinstd ~(1 |id|segment) +(1|id2|year_segment) ,
-     nlf(sigmabin~exp(sigmabinstd),loop=FALSE),
-     sigmabinstd~(1 |id|segment) +(1|id2|year_segment),
+formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ 1+ (1|id2|year_segment),
+     mubin~1+(1|id|segment),
+     sigmabin~1+(1|id|segment),
+     nlf(Upois ~ exp(Upoisstd),loop=FALSE),
+     mupois~ 1+(1|id|segment),
+     Upoisstd ~1+(1|id2|year_segment) ,
+     nlf(sigmapois~exp(sigmapoisstd),loop=FALSE),
+     sigmapoisstd~1+(1|id|segment),
      family = sharedpars_exposure)
 
 # specify std normal non-centred priors
 mypriors <- c(
-  prior(normal(0, 1), class = "b", nlpar = "Ubinstd"),
+  #prior(normal(0, 1), class = "b", nlpar = "Ubinstd"),
   #prior(normal(0, 1), dpar = "mu"),
-  prior(normal(0, 1), class = "b", nlpar = "sigmabinstd"),
-  prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
-  prior(normal(0, 1), class = "Intercept", dpar = "mupois"),
-  prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  #prior(normal(0, 1), class = "b", nlpar = "sigmabinstd"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "mupois"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
   )
 ```
 
@@ -617,7 +617,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
                           real exposure
                           ){
 
-    return poisson_lpmf(N|N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois)));
+    return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois)));
 
 }
 
@@ -649,21 +649,23 @@ stancode_exposure = make_stancode(formula_exposure,
 # brms call with exposure 
 
 ```{r}
-
+library(brms)
+library(dplyr)
 model_triangles_exposure = brm(
   formula_exposure,
   prior = mypriors,
   stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
-  data = stan_data_multisegment, 
+  data = stan_data_multisegment%>%filter(year<12), 
   backend = "cmdstan",
-  threads = threading(6),
+  threads = threading(12),
   control = list(adapt_delta = 0.99),
+  max_treedepth=20,
   seed = 1234,
-  refresh = 20,
+  refresh = 1,
   iter = 100, 
   warmup = 20,
   init = 0,
-  chains = 1, cores = 6
+  chains = 1, cores = 12,silent=2,
   #file = "frequencyCMDStan3.rds"
   )
 ```
@@ -675,4 +677,70 @@ Also noted is the fact that this code is onot parallelised, so not very efficien
 
 We will now modify the family definition to accommodate the requirements of parallel execution. The most notable of which is that there can only be one loglikelihood calculation due to the need to share parameters.
 
+# expose functions
+
+```{r}
+# we need to recompile using rstan to expose the ODE functions to r so that we can use them to compute N(t)
+
+library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which is quite old but works for this
+library(brms)
+modelRstan = brm(
+  formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
+  data = stan_data_multisegment%>%filter(year<12), 
+  backend = "rstan",# change to rstan to make use of "expose_functions()"
+  chains = 0, # runs no iterations
+  )
+expose_functions(modelRstan, vectorize = TRUE, cacheDir = "~/ULR-model")
+```
+# sample posterior
+now that we got that working, we move to getting a few samples from tidybayes
+
+```{r}
+# first have to define the helper function to generate the posterior 
+
+prep_data = prepare_predictions(model_triangles_exposure) # needed to extract both mv models prep data simultaneously
+posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
+  # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
+  # this is the current, most basic, approximate method for generating an estimate of N. 
+  
+  Ubinom <- brms::get_dpar(prep, "mu", i = i)
+  mubinom <- brms::get_dpar(prep, "mupois", i = i)
+  sigmabinom <- brms::get_dpar(prep, "sigmapois", i = i)
+  mupois <- brms::get_dpar(prep, "mubin", i = i)
+  sigmapois <- brms::get_dpar(prep, "sigmabin", i = i)
+  Upois <- brms::get_dpar(prep, "Ubin", i = i)
+  t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  N_est = c()
+  for (j in 1:prep$ndraws){
+    N_est[j] = N_int(t,Upois[j],Ubinom[j],mupois[j],sigmapois[j],mubinom[j],sigmabinom[j])
+  }
+  
+  rpois(prep$ndraws,N_est)
+}
+
+library(tidybayes)
+library(plotly)
+library(ggplot2)
+library(patchwork)# allows for the side by side charting process that you see below
+pred <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(year<12))
+
+
+N_plot = pred%>%filter(segment==1,year ==5)%>%
+   ggplot(aes(x = t, y = .prediction)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+ geom_point(data = pred%>%filter(segment==1,year ==5), aes(t, N))
+
+N_pos_plot = pred%>%filter(.category=="Nposincrement")%>%
+  group_by(.draw)%>%
+  mutate(N_pos_cum_sample = cumsum(.prediction))%>%ungroup()%>%
+   ggplot(aes(x = t, y = N_pos_cum_sample)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+ geom_point(data = standata, aes(t, N_pos))
+
+N_plot + N_pos_plot
+```
 
