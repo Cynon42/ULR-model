@@ -663,7 +663,7 @@ model_triangles_exposure = brm(
   seed = 1234,
   refresh = 1,
   iter = 100, 
-  warmup = 20,
+  warmup = 50,
   init = 0,
   chains = 1, cores = 12,silent=2,
   #file = "frequencyCMDStan3.rds"
@@ -712,9 +712,10 @@ posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
   sigmapois <- brms::get_dpar(prep, "sigmabin", i = i)
   Upois <- brms::get_dpar(prep, "Ubin", i = i)
   t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  exposure <- prep$data$vreal3[i]
   N_est = c()
   for (j in 1:prep$ndraws){
-    N_est[j] = N_int(t,Upois[j],Ubinom[j],mupois[j],sigmapois[j],mubinom[j],sigmabinom[j])
+    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubinom[j],mupois[j],sigmapois[j],mubinom[j],sigmabinom[j])
   }
   
   rpois(prep$ndraws,N_est)
