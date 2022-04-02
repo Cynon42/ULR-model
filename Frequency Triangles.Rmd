@@ -487,7 +487,7 @@ Now we have a version running with multithreading
 
 library(brms)
 sharedpars_exposure <- custom_family(
-                    "sharedpars_exposure", dpars = c("mu","mubin","sigmabin","Upois","mupois","sigmapois"), # actually mu is really the Ubin for the binomial 
+                    "sharedpars_exposure", dpars = c("mu","mupois","sigmapois","Ubin","mubin","sigmabin"), # actually mu is really the Upois for the poisson 
                     links = c("log","identity","log","identity","identity","identity"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
@@ -508,14 +508,14 @@ The formula can now be made more versatile to account for trending in developmen
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
-formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ 1+ (1|id2|year_segment),
-     mubin~1+(1|id|segment),
-     sigmabin~1+(1|id|segment),
-     nlf(Upois ~ exp(Upoisstd),loop=FALSE),
-     mupois~ 1+(1|id|segment),
-     Upoisstd ~1+(1|id2|year_segment) ,
-     nlf(sigmapois~exp(sigmapoisstd),loop=FALSE),
-     sigmapoisstd~1+(1|id|segment),
+formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|id2|year_segment),
+     mupois~(1|id2|year_segment),
+     sigmapois~(1|id2|year_segment),
+     nlf(Ubin ~ exp(Ubinstd),loop=FALSE),
+     mubin~ (1|id|segment),
+     Ubinstd ~(1|id|segment) ,
+     nlf(sigmabin~exp(sigmabinstd),loop=FALSE),
+     sigmabinstd~(1|id|segment),
      family = sharedpars_exposure)
 
 # specify std normal non-centred priors
@@ -523,8 +523,8 @@ mypriors <- c(
   #prior(normal(0, 1), class = "b", nlpar = "Ubinstd"),
   #prior(normal(0, 1), dpar = "mu"),
   #prior(normal(0, 1), class = "b", nlpar = "sigmabinstd"),
-  #prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
-  #prior(normal(0, 1), class = "Intercept", dpar = "mupois"),
+  prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
+  prior(normal(0, 1), class = "Intercept", dpar = "mupois")
   #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
   )
 ```
@@ -617,6 +617,11 @@ real sharedpars_exposure_lpmf(int Nposincrement,
                           real exposure
                           ){
 
+    // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
+    // 2.3 is the z-score for the 99th percentile, mu must be less than this figure to be at least 99% developed by month 60
+    mupois = log(60)-2.3*sigmapois-exp(mupois);
+    mubin = log(60)-2.3*sigmabin-exp(mubin);
+
     return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois)));
 
 }
@@ -705,17 +710,18 @@ posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
   # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
   # this is the current, most basic, approximate method for generating an estimate of N. 
   
-  Ubinom <- brms::get_dpar(prep, "mu", i = i)
-  mubinom <- brms::get_dpar(prep, "mupois", i = i)
-  sigmabinom <- brms::get_dpar(prep, "sigmapois", i = i)
-  mupois <- brms::get_dpar(prep, "mubin", i = i)
-  sigmapois <- brms::get_dpar(prep, "sigmabin", i = i)
-  Upois <- brms::get_dpar(prep, "Ubin", i = i)
+  Upois <- brms::get_dpar(prep, "mu", i = i)
+  mupois <- brms::get_dpar(prep, "mupois", i = i)
+  sigmapois <- brms::get_dpar(prep, "sigmapois", i = i)
+  mubin <- brms::get_dpar(prep, "mubin", i = i)
+  sigmabin <- brms::get_dpar(prep, "sigmabin", i = i)
+  Ubin <- brms::get_dpar(prep, "Ubin", i = i)
   t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
   exposure <- prep$data$vreal3[i]
   N_est = c()
   for (j in 1:prep$ndraws){
-    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubinom[j],mupois[j],sigmapois[j],mubinom[j],sigmabinom[j])
+    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubin[j],mupois[j],sigmapois[j],mubin[j],sigmabin[j])
+    #print(N_est[j])#," ",t," ",Upois[j]*exposure*1e-7," ",Ubin[j]," ",mupois[j]," ",sigmapois[j]," ",mubin[j]," ",sigmabin[j])
   }
   
   rpois(prep$ndraws,N_est)
@@ -734,7 +740,7 @@ N_plot = pred%>%filter(segment==1,year ==5)%>%
   scale_fill_brewer() +
  geom_point(data = pred%>%filter(segment==1,year ==5), aes(t, N))
 
-N_pos_plot = pred%>%filter(.category=="Nposincrement")%>%
+N_pos_plot = pred%>%filter(segment==1,year ==5)%>%
   group_by(.draw)%>%
   mutate(N_pos_cum_sample = cumsum(.prediction))%>%ungroup()%>%
    ggplot(aes(x = t, y = N_pos_cum_sample)) +
