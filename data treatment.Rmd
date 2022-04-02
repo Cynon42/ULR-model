@@ -51,9 +51,9 @@ triangle_inc_exposure = triangle %>% merge(exposure_table)
 stan_data_multisegment = triangle_inc_exposure%>%ungroup()%>%
   mutate(year = YOA-min(YOA)+1,
          exposure = NetPrem,
-         segment = as.numeric(factor(as.numeric(factor(Country))&as.numeric(factor(ReservingClass))))
+         segment = as.numeric(factor(as.numeric(factor(Country))*as.numeric(factor(ReservingClass))))
          )%>%
-  group_by(segment,year)%>% arrange(DevMth)%>%
+  group_by(segment,year)%>% arrange(segment,year,DevMth)%>%
   mutate(Nprev = lag(N_cum,lag=1, default = 0))%>%
   rename(t = DevMth,
          tprev = DevMth_prior,
