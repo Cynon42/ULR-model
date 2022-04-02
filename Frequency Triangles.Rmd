@@ -488,7 +488,7 @@ Now we have a version running with multithreading
 library(brms)
 sharedpars_exposure <- custom_family(
                     "sharedpars_exposure", dpars = c("mu","mupois","sigmapois","Ubin","mubin","sigmabin"), # actually mu is really the Upois for the poisson 
-                    links = c("log","identity","log","identity","identity","identity"),
+                    links = c("log","identity","log","log","identity","log"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
                              "vint2[n]", # N
@@ -508,24 +508,22 @@ The formula can now be made more versatile to account for trending in developmen
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
-formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|id2|year_segment),
-     mupois~(1|id2|year_segment),
-     sigmapois~(1|id2|year_segment),
-     nlf(Ubin ~ exp(Ubinstd),loop=FALSE),
-     mubin~ (1|id|segment),
-     Ubinstd ~(1|id|segment) ,
-     nlf(sigmabin~exp(sigmabinstd),loop=FALSE),
-     sigmabinstd~(1|id|segment),
+formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ 1,
+     mupois~1,
+     sigmapois~1,
+     mubin~ 1,
+     Ubin ~1 ,
+     sigmabin~1,
      family = sharedpars_exposure)
 
 # specify std normal non-centred priors
 mypriors <- c(
-  #prior(normal(0, 1), class = "b", nlpar = "Ubinstd"),
-  #prior(normal(0, 1), dpar = "mu"),
-  #prior(normal(0, 1), class = "b", nlpar = "sigmabinstd"),
+  prior(normal(0, 1), class = "Intercept",  dpar = "Ubin"),
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
   prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
-  prior(normal(0, 1), class = "Intercept", dpar = "mupois")
-  #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  prior(normal(0, 1), class = "Intercept", dpar = "mupois"),
+  prior(normal(0, 1), class = "Intercept", dpar = "mubin")
   )
 ```
 
@@ -619,10 +617,10 @@ real sharedpars_exposure_lpmf(int Nposincrement,
 
     // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
     // 2.3 is the z-score for the 99th percentile, mu must be less than this figure to be at least 99% developed by month 60
-    mupois = log(60)-2.3*sigmapois-exp(mupois);
-    mubin = log(60)-2.3*sigmabin-exp(mubin);
+    //mupois = log(60)-2.3*sigmapois-exp(mupois);
+    //mubin = log(60)-2.3*sigmabin-exp(mubin);
 
-    return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois)));
+    return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,log(60)-2.3*sigmapois-exp(mupois),sigmapois,log(60)-2.3*sigmabin-exp(mubin),sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
 
 }
 
@@ -660,11 +658,11 @@ model_triangles_exposure = brm(
   formula_exposure,
   prior = mypriors,
   stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
-  data = stan_data_multisegment%>%filter(year<12), 
+  data = stan_data_multisegment%>%filter(year==5,segment==1), 
   backend = "cmdstan",
   threads = threading(12),
   control = list(adapt_delta = 0.99),
-  max_treedepth=20,
+  max_treedepth=12,
   seed = 1234,
   refresh = 1,
   iter = 100, 
@@ -731,7 +729,7 @@ library(tidybayes)
 library(plotly)
 library(ggplot2)
 library(patchwork)# allows for the side by side charting process that you see below
-pred <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(year<12))
+pred <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==1,year ==5))
 
 
 N_plot = pred%>%filter(segment==1,year ==5)%>%
