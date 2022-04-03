@@ -715,36 +715,63 @@ posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
   sigmabin <- brms::get_dpar(prep, "sigmabin", i = i)
   Ubin <- brms::get_dpar(prep, "Ubin", i = i)
   t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  tprev <- prep$data$vreal2[i]
   exposure <- prep$data$vreal3[i]
   N_est = c()
+  lambda = c()
   for (j in 1:prep$ndraws){
-    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubin[j],mupois[j],sigmapois[j],mubin[j],sigmabin[j])
-    #print(N_est[j])#," ",t," ",Upois[j]*exposure*1e-7," ",Ubin[j]," ",mupois[j]," ",sigmapois[j]," ",mubin[j]," ",sigmabin[j])
+    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubin[j],log(60)-2.3*sigmapois[j]-exp(mupois[j]),sigmapois[j],log(60)-2.3*sigmabin[j]-exp(mubin[j]),sigmabin[j])
+    lambda[j]= exp(log(exposure) - log(1e7)+ log(Upois[j]) +logdifffunction( t, tprev, log(60)-2.3*sigmapois[j]-exp(mupois[j]), sigmapois[j]))
   }
   
-  rpois(prep$ndraws,N_est)
+  rpois(prep$ndraws,N_est)# rpois(prep$ndraws,lambda))
 }
 
 library(tidybayes)
 library(plotly)
 library(ggplot2)
 library(patchwork)# allows for the side by side charting process that you see below
-pred <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==1,year ==5))
+predN <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==1,year ==5))
+
+posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
+  # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
+  # this is the current, most basic, approximate method for generating an estimate of N. 
+  
+  Upois <- brms::get_dpar(prep, "mu", i = i)
+  mupois <- brms::get_dpar(prep, "mupois", i = i)
+  sigmapois <- brms::get_dpar(prep, "sigmapois", i = i)
+  mubin <- brms::get_dpar(prep, "mubin", i = i)
+  sigmabin <- brms::get_dpar(prep, "sigmabin", i = i)
+  Ubin <- brms::get_dpar(prep, "Ubin", i = i)
+  t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  tprev <- prep$data$vreal2[i]
+  exposure <- prep$data$vreal3[i]
+  N_est = c()
+  lambda = c()
+  for (j in 1:prep$ndraws){
+    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubin[j],log(60)-2.3*sigmapois[j]-exp(mupois[j]),sigmapois[j],log(60)-2.3*sigmabin[j]-exp(mubin[j]),sigmabin[j])
+    lambda[j]= exp(log(exposure) - log(1e7)+ log(Upois[j]) +logdifffunction( t, tprev, log(60)-2.3*sigmapois[j]-exp(mupois[j]), sigmapois[j]))
+  }
+  
+  rpois(prep$ndraws,lambda)
+}
 
 
-N_plot = pred%>%filter(segment==1,year ==5)%>%
+predNpos <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==1,year ==5))
+
+N_plot = predN%>%filter(segment==1,year ==5)%>%
    ggplot(aes(x = t, y = .prediction)) +
   stat_lineribbon() +
   scale_fill_brewer() +
- geom_point(data = pred%>%filter(segment==1,year ==5), aes(t, N))
+ geom_point(data = predN%>%filter(segment==1,year ==5), aes(t, N))
 
-N_pos_plot = pred%>%filter(segment==1,year ==5)%>%
+N_pos_plot = predNpos%>%filter(segment==1,year ==5)%>%
   group_by(.draw)%>%
   mutate(N_pos_cum_sample = cumsum(.prediction))%>%ungroup()%>%
    ggplot(aes(x = t, y = N_pos_cum_sample)) +
   stat_lineribbon() +
   scale_fill_brewer() +
- geom_point(data = standata, aes(t, N_pos))
+ geom_point(data = stan_data_multisegment%>%filter(segment==1,year ==5), aes(t, N_pos_cum))
 
 N_plot + N_pos_plot
 ```

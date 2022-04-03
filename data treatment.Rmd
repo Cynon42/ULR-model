@@ -28,7 +28,7 @@ data_steps = nld.clm %>%
          negative_claim_increment = (claim_increment==-1)*1)
   
 triangle = data_steps %>%filter(DevMth>0)%>%
-  group_by(SelYOA,DevMth,ReservingClass,Country)%>%
+  group_by(Country,ReservingClass,SelYOA,DevMth)%>%
   summarise(N_pos = sum(positive_claim_increment),N_neg = sum(negative_claim_increment),N=sum(claim_increment))%>%
   group_by(SelYOA,ReservingClass,Country)%>%arrange(ReservingClass,Country,SelYOA,DevMth)%>%
   mutate(N_pos_cum = cumsum(N_pos),N_neg_cum = cumsum(N_neg),N_cum=cumsum(N))
@@ -73,7 +73,7 @@ stan_data_multisegment = triangle_inc_exposure%>%ungroup()%>%
          N_neg_increment,
          N_pos_increment,
          N_increment,
-         N,Nprev)%>%mutate(year_segment = as.numeric(factor(year*segment)))
+         N,Nprev,N_pos_cum)%>%mutate(year_segment = as.numeric(factor(year*segment)))
 
 
 ```
