@@ -700,11 +700,11 @@ expose_functions(modelRstan, vectorize = TRUE, cacheDir = "~/ULR-model")
 # sample posterior
 now that we got that working, we move to getting a few samples from tidybayes
 
+first define two functions to work with posterior predict that generate posterior draws from the two different predictions, N and N_pos.
 ```{r}
 # first have to define the helper function to generate the posterior 
 
-prep_data = prepare_predictions(model_triangles_exposure) # needed to extract both mv models prep data simultaneously
-posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
+posterior_predict_sharedpars_exposure_N <- function(i, prep, ...) {
   # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
   # this is the current, most basic, approximate method for generating an estimate of N. 
   
@@ -727,15 +727,7 @@ posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
   rpois(prep$ndraws,N_est)# rpois(prep$ndraws,lambda))
 }
 
-library(tidybayes)
-library(plotly)
-library(ggplot2)
-library(patchwork)# allows for the side by side charting process that you see below
-selectedsegment=1
-selectedyear =3
-predN <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==selectedsegment,year ==selectedyear))
-
-posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
+posterior_predict_sharedpars_exposure_Npos <- function(i, prep, ...) {
   # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
   # this is the current, most basic, approximate method for generating an estimate of N. 
   
@@ -758,7 +750,23 @@ posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
   rpois(prep$ndraws,lambda)
 }
 
+```
 
+now generate plots of the actual versus fitted for a selected year.
+
+```{r}
+library(tidybayes)
+library(plotly)
+library(ggplot2)
+library(patchwork)# allows for the side by side charting process that you see below
+
+selectedsegment=2
+selectedyear =10
+
+posterior_predict_sharedpars_exposure = posterior_predict_sharedpars_exposure_N
+predN <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==selectedsegment,year ==selectedyear))
+
+posterior_predict_sharedpars_exposure = posterior_predict_sharedpars_exposure_Npos
 predNpos <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==selectedsegment,year ==selectedyear))
 
 N_plot = predN%>%filter(segment==selectedsegment,year ==selectedyear)%>%
@@ -777,4 +785,32 @@ N_pos_plot = predNpos%>%filter(segment==selectedsegment,year ==selectedyear)%>%
 
 N_plot + N_pos_plot
 ```
+we note that recent years are failing for some reason. Lets check in more detail.
 
+```{r}
+library(brms)
+library(dplyr)
+model_library = list()
+
+for (i in unique(stan_data_multisegment$year_segment)[1:3]){
+  model_library[i] = brm(
+  formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
+  data = stan_data_multisegment%>%filter(year_segment==i), 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=12,
+  seed = 1235,
+  refresh = 1,
+  iter = 2, 
+  warmup = 1,
+  init = 0,
+  chains = 1, cores = 12,silent=2,
+  #file = "frequencyCMDStan3.rds"
+  )
+  
+}
+
+```
