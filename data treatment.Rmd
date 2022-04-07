@@ -1,0 +1,82 @@
+---
+title: "data treatment"
+author: "Cy Sonkkila"
+date: '2022-03-24'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data treatment processing
+
+```{r}
+library(dplyr)
+load("~/ULR-model/data/eur.dat.RData")
+data_steps = nld.clm %>% 
+  group_by(ClaimNo,DevMth,Country,PolicyNo,OrigInception,Insured,TradeCode,TradeCodeDesc,ProductCode,ProductDescription,EuropeanClass,SubClass,ReservingClass,ClaimYOA,DateOfLoss,ImportDate,DateClosed,SelYOA,ReportDelay,TradeCodeDetailed)%>%
+  summarise(incurred_movement_monthend = sum(Incurred))%>%
+  arrange(ClaimNo,DevMth)%>%
+  group_by(ClaimNo,Country,PolicyNo,OrigInception,Insured,TradeCode,TradeCodeDesc,ProductCode,ProductDescription,EuropeanClass,SubClass,ReservingClass,ClaimYOA,DateOfLoss,ImportDate,DateClosed,SelYOA,ReportDelay,TradeCodeDetailed)%>%
+  mutate(incurred_cumulative = cumsum(incurred_movement_monthend))%>%
+  mutate(incurred_cumulative_prior = cumsum(incurred_movement_monthend)-incurred_movement_monthend)%>%
+  mutate(above5 = (incurred_cumulative>=5)*1,
+         above5_prior = (incurred_cumulative_prior>=5)*1)%>%
+  mutate(claim_increment = above5-above5_prior)%>%
+  mutate(positive_claim_increment = (claim_increment==1)*1,
+         negative_claim_increment = (claim_increment==-1)*1)
+  
+triangle = data_steps %>%filter(DevMth>0)%>%
+  group_by(Country,ReservingClass,SelYOA,DevMth)%>%
+  summarise(N_pos = sum(positive_claim_increment),N_neg = sum(negative_claim_increment),N=sum(claim_increment))%>%
+  group_by(SelYOA,ReservingClass,Country)%>%arrange(ReservingClass,Country,SelYOA,DevMth)%>%
+  mutate(N_pos_cum = cumsum(N_pos),N_neg_cum = cumsum(N_neg),N_cum=cumsum(N))
+
+triangle = triangle %>% 
+  bind_rows(
+  triangle%>%group_by(Country,ReservingClass,SelYOA)%>%
+    filter(DevMth==max(DevMth))%>% mutate(currentdev = (2022-SelYOA)*12+2)%>%mutate(addrow = (DevMth<currentdev)*1)%>%
+    filter(addrow==1)%>%mutate(N = 0,N_pos=0,N_neg=0, DevMth=currentdev)%>%
+    select(-addrow,-currentdev))%>%
+  group_by(Country,ReservingClass,SelYOA)%>%
+  arrange(Country,ReservingClass,SelYOA,DevMth)%>%rename(YOA=SelYOA)%>%
+  mutate(DevMth_prior = lag(DevMth,lag=1, default = 0.1))
+
+# get exposure data 
+exposure_table = eur.dat.cul.mth%>%select(-(7:23))%>% group_by(ReservingClass,YOA,Country,DevMth)%>%summarise_all(last)%>% group_by(ReservingClass,YOA,Country)%>%select(-2,-3,-6)%>%summarise(NetPrem = sum(NetPrem))
+
+triangle_inc_exposure = triangle %>% merge(exposure_table)
+
+stan_data_multisegment = triangle_inc_exposure%>%ungroup()%>%
+  mutate(year = YOA-min(YOA)+1,
+         exposure = NetPrem,
+         segment = as.numeric(factor(as.numeric(factor(Country))*as.numeric(factor(ReservingClass))))
+         )%>%
+  group_by(segment,year)%>% arrange(segment,year,DevMth)%>%
+  mutate(Nprev = lag(N_cum,lag=1, default = 0))%>%
+  rename(t = DevMth,
+         tprev = DevMth_prior,
+         N_neg_increment = N_neg,
+         N_pos_increment = N_pos,
+         N_increment = N,
+         country=Country,reservingclass=ReservingClass,
+         N = N_cum
+         )%>%
+  filter(exposure>0)%>%ungroup()%>%
+  select(country,
+         reservingclass,
+         year,
+         segment,
+         exposure,
+         t,tprev,
+         N_neg_increment,
+         N_pos_increment,
+         N_increment,
+         N,Nprev,N_pos_cum)%>%mutate(year_segment = as.numeric(factor(year*segment)))
+
+
+```
+
+
+
