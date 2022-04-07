@@ -425,7 +425,7 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
   return lambda;
 }
 
-real sharedpars_test_lpmf(int Nnegincrement,
+real sharedpars_test_lpmf(int Nposincrement,
                           real Ubin,
                           real mubin,
                           real sigmabin,
@@ -445,7 +445,7 @@ real sharedpars_test_lpmf(int Nnegincrement,
       p= 1e-20; //error trap for some extreme initial conditions
     } 
     //return binomial_lpmf(Nnegincrement | N+Nnegincrement, min([0.99,min([0.99, Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)))])]) );
-    return poisson_lpmf(N|p) + poisson_lpmf(N|exp(log(Upois) + logdifffunction(t,tprev,mupois,sigmapois)));
+    return poisson_lpmf(N|p) + poisson_lpmf(Nposincrement|exp(log(Upois) + logdifffunction(t,tprev,mupois,sigmapois)));
 
 }
 
@@ -487,8 +487,8 @@ Now we have a version running with multithreading
 
 library(brms)
 sharedpars_exposure <- custom_family(
-                    "sharedpars_exposure", dpars = c("mu","mubin","sigmabin","Upois","mupois","sigmapois"), # actually mu is really the Ubin for the binomial 
-                    links = c("log","identity","log","identity","identity","log"),
+                    "sharedpars_exposure", dpars = c("mu","mupois","sigmapois","Ubin","mubin","sigmabin"), # actually mu is really the Upois for the poisson 
+                    links = c("log","identity","log","log","identity","log"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
                              "vint2[n]", # N
@@ -508,24 +508,22 @@ The formula can now be made more versatile to account for trending in developmen
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
-formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1 + year + year^2|id|segment),
-     mubin~(1 + year + year^2|id|segment),
-     sigmabin~(1 + year + year^2|id|segment),
-     nlf(Upois ~ exp(Upoisstd*2+5)),
-     mupois~ (1 + year + year^2|id|segment),
-     Upoisstd ~(1 + year + year^2 + log(exposure/1e7)|id|segment) ,
-     nlf(sigmapois~exp(sigmapoisstd)),
-     sigmapoisstd~(1 + year + year^2|id|segment),
+formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|id2|year_segment),
+     mupois~(1|id2|year_segment),
+     sigmapois~(1|id2|year_segment),
+     mubin~ (1|id2|year_segment),
+     Ubin ~(1|id2|year_segment) ,
+     sigmabin~(1|id2|year_segment),
      family = sharedpars_exposure)
 
 # specify std normal non-centred priors
 mypriors <- c(
-  prior(normal(0, 1), class = "b", nlpar = "Upoisstd"),
-  #prior(normal(0, 1), dpar = "mu"),
-  prior(normal(0, 1), class = "b", nlpar = "sigmapoisstd"),
-  prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
-  prior(normal(2, 2), class = "Intercept", dpar = "mupois"),
-  prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  #prior(normal(0, 1), class = "Intercept",  dpar = "Ubin"),
+  #prior(normal(0, 1), class = "Intercept"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "mupois"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
   )
 ```
 
@@ -603,13 +601,13 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
   return lambda;
 }
 
-real sharedpars_exposure_lpmf(int Nnegincrement,
-                          real Ubin,
-                          real mubin,
-                          real sigmabin,
+real sharedpars_exposure_lpmf(int Nposincrement,
                           real Upois,
                           real mupois,
                           real sigmapois,
+                          real Ubin,
+                          real mubin,
+                          real sigmabin,
                           int Nprev,
                           int N,
                           real t,
@@ -617,7 +615,12 @@ real sharedpars_exposure_lpmf(int Nnegincrement,
                           real exposure
                           ){
 
-    return poisson_lpmf(N|N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)) + poisson_log_lpmf(N|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|mupois,sigmapois), lognormal_lccdf(t|mupois,sigmapois)));
+    // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
+    // 2.3 is the z-score for the 99th percentile, mu must be less than this figure to be at least 99% developed by month 60
+    //mupois = log(60)-2.3*sigmapois-exp(mupois);
+    //mubin = log(60)-2.3*sigmabin-exp(mubin);
+
+    return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,log(60)-2.3*sigmapois-exp(mupois),sigmapois,log(60)-2.3*sigmabin-exp(mubin),sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
 
 }
 
@@ -646,49 +649,30 @@ stancode_exposure = make_stancode(formula_exposure,
   backend = "cmdstan")
 ```
 
-# brms call with exposure and trending
-```{r}
+# brms call with exposure 
 
+```{r}
+library(brms)
+library(dplyr)
 model_triangles_exposure = brm(
   formula_exposure,
   prior = mypriors,
   stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
-  data = stan_data_multisegment, 
+  data = stan_data_multisegment%>%filter(segment<3), 
   backend = "cmdstan",
-  threads = threading(6),
+  threads = threading(16),
   control = list(adapt_delta = 0.99),
-  seed = 1234,
+  max_treedepth=15,
+  seed = 1235,
   refresh = 1,
-  iter = 20, 
+  iter = 100, 
+  warmup = 50,
   init = 0,
-  chains = 1, cores = 6
+  chains = 4, cores = 64,silent=2,
   #file = "frequencyCMDStan3.rds"
   )
 ```
-
-
-
-run corrected model
-```{r}
-
-model_triangles = brm(
-  formula,
-  prior = mypriors,
-  stanvars = stanvar(scode = stan_functions, block = "functions"),
-  data = stan_data_multisegment, 
-  backend = "cmdstan",
-  #threads = threading(6),
-  control = list(adapt_delta = 0.99),
-  seed = 1234,
-  refresh = 20,
-  iter = 600, 
-  init = 0,
-  chains = 4, cores = 6
-  #file = "frequencyCMDStan3.rds"
-  )
-```
-
-note the use of init=0 to quickly provide initial conditions of the model where you should have the ability for all the math to work. In extreme conditions some initialisation can cause the code to give errors because the suggested initial parameters are VERY large or VERY small. In the case of a large model where there are so many parameters, the chance of one parameter being an accidentally bad choice is much higher and can kill your model.
+Note the use of init=0 to quickly provide initial conditions of the model where you should have the ability for all the math to work. In extreme conditions some initialisation can cause the code to give errors because the suggested initial parameters are VERY large or VERY small. In the case of a large model where there are so many parameters, the chance of one parameter being an accidentally bad choice is much higher and can kill your model.
 
 Debugging identified that there were two entries where claims had movements at or before t=0, which is not permitted in this model. There can not be any claims at t=0. Since these were only two spurious entries, they were removed. The model is now running, but may require some further tweaks.
 
@@ -696,244 +680,99 @@ Also noted is the fact that this code is onot parallelised, so not very efficien
 
 We will now modify the family definition to accommodate the requirements of parallel execution. The most notable of which is that there can only be one loglikelihood calculation due to the need to share parameters.
 
-```{r}
-# nlp_Nnegincrement_Ubin[n] naming conventions
-
-sharedpars <- custom_family(
-                    "sharedpars", dpars = c("mu","mubin","sigmabin","Upois","mupois","sigmapois"), # actually mu is really the Ubin for the binomial 
-                    links = c("log","identity","log","identity","identity","log"),
-                    type = "int",# lpmf vs lpdf passing in the Npos_increment
-                    vars = c("vint1[n]", # Nprev
-                             "vint2[n]", # N
-                             "vreal1[n]",# t
-                             "vreal2[n]",# tprev
-                             "vreal3[n]" # exposure
-                             ) 
-              )
-```
-
+# expose functions
 
 ```{r}
+# we need to recompile using rstan to expose the ODE functions to r so that we can use them to compute N(t)
+
+library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which is quite old but works for this
 library(brms)
-# writing the formula for the model making use of time and segmentation of the data
-formula <-  bf(
-   N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ exp(Upoisstd*2+7) ,
-   mubin~0 + (1 + year+year^2|id|segment),
-   sigmabin~0 + (1 + year+year^2|id|segment),
-   mupois~ 0 + (1 + year+year^2|id|segment),
-   Upoisstd ~0 + (1 + year+year^2|id|segment),
-   nlf(sigmapois~exp(sigmapoisstd+1)),
-   sigmapoisstd~0 + (1 + year+year^2|id|segment),
-  family = sharedpars,
-  nl=TRUE
+modelRstan = brm(
+  formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
+  data = stan_data_multisegment%>%filter(year<12), 
+  backend = "rstan",# change to rstan to make use of "expose_functions()"
+  chains = 0, # runs no iterations
   )
-
-# specify std normal non-centred priors
-mypriors <- c(
-  #prior(normal(0, 1),resp = "Nposincrement", nlpar = "Upoisstd"),
-  #prior(normal(0, 1), resp = "Nnegincrement",dpar = "mu"),
-  #prior(normal(0, 1), resp = "Nposincrement",nlpar = "sigmapoisstd"),
-  #prior(normal(0, 1), class = "Intercept",resp = "Nnegincrement",dpar = "sigmabin"),
-  #prior(normal(2, 2), resp = "Nposincrement",nlpar = "mupois"),
-  #prior(normal(0, 1), class = "Intercept",resp = "Nnegincrement",dpar = "mubin")
-  )
+expose_functions(modelRstan, vectorize = TRUE, cacheDir = "~/ULR-model")
 ```
-
+# sample posterior
+now that we got that working, we move to getting a few samples from tidybayes
 
 ```{r}
-stan_functions = "// we solve for #>0 at any point in time t  
-vector N_ode(real t,//time
-             vector N,// expected # of non-zero claims and expected # dropping to zero at time t. must be a vector so 2d. This is what is being solved for.
-             real U,
-             real U_p,
-             real mu,
-             real sigma,
-             real mu_p,
-             real sigma_p
-             ) {
-    vector[2] dNdt;
-    dNdt[1] = exp(log_diff_exp(log(U)+lognormal_lpdf(t|mu,sigma),log(N[1])+log(U_p)+lognormal_lpdf(t|mu_p,sigma_p)));// cumulative # claims >0
-    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));
-    print(dNdt[1],\" \",dNdt[2]);
-    return dNdt;// cumulative # claims dropped back to zero
-}
-// modify signature for calls from the integrator to output N
-real[] N_ode_int(real t, 
-                  real [] N,  // both N and N_neg
-                  real [] theta, // model parameters
-              real [] x_r, int[] x_i
-             ) {
-    real dNdt[2];
-    real U = theta[1];
-    real U_p = theta[2];
-    real mu = theta[3];
-    real sigma = theta[4];
-    real mu_p = theta[5];
-    real sigma_p = theta[6];
-    
-    dNdt[1] = U*exp(lognormal_lpdf(t|mu,sigma))-N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
-    dNdt[2] = N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
-    return dNdt;
-}
+# first have to define the helper function to generate the posterior 
 
-// Integrate ODE to solve for N at a point in time 
-real N_int(real t,
-        real U,
-        real U_p,
-        real mu,
-        real sigma,
-        real mu_p,
-        real sigma_p
-        ) {
-  real N0[2];     // Initial values
-  real par[6];  // Parameters
-  real N[1, 2];   // ODE solution at time t
-  real returnpar;
+prep_data = prepare_predictions(model_triangles_exposure) # needed to extract both mv models prep data simultaneously
+posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
+  # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
+  # this is the current, most basic, approximate method for generating an estimate of N. 
   
-  // check gradients can be calculated
-  N0[1] = U*exp(lognormal_lpdf(t|mu,sigma))-1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
-    N0[2] = 1.0*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
-  if(is_nan(N0[1])||is_nan(N0[2])) print(N0[1],\" \",N0[2]);
-  // Set initial values. There should be no claims initially
-  N0[1] = 0; 
-  N0[2] = 0;
-  // Set parameters
-  par[1] = U;
-  par[2] = U_p;
-  par[3] = mu; 
-  par[4] = sigma;
-  par[5] = mu_p; 
-  par[6] = sigma_p;
-  
-  
-  
-  // Solve ODEs 
-  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
-  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
-                         N0, // N and N- at t=0
-                         0.0, // initial t=0
-                         rep_array(t, 1), //array of times at which to find N
-                         par,// set of parameters for ode function
-                         rep_array(0.0, 0), // not needed real data
-                         rep_array(1, 1),// not needed int data
-                         1e-6, 1e-5, 1e3); // max steps
-  // Return relevant values
-  returnpar = N[1,1];// returns N only
-  return returnpar;
-}
-
-// Integrate ODE to solve for N- at a point in time
-real N_neg_int(real t,
-        real U,
-        real U_p,
-        real mu,
-        real sigma,
-        real mu_p,
-        real sigma_p
-        ) {
-  real N0[2];     // Initial values
-  real par[6];  // Parameters
-  real N[1, 2];   // ODE solution at time t
-  real returnpar;
-  // Set initial values. There should be no claims initially
-  N0[1] = 0; 
-  N0[2] = 0;
-  // Set parameters
-  par[1] = U;
-  par[2] = U_p;
-  par[3] = mu; 
-  par[4] = sigma;
-  par[5] = mu_p; 
-  par[6] = sigma_p;
-  
-  // Solve ODEs 
-  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
-  N = integrate_ode_rk45(N_ode_int, //function that will receive par as input
-                         N0, // N and N- at t=0
-                         0.0 , // initial t=0
-                         rep_array(t, 1), //array of times at which to find N
-                         par,// set of parameters for ode function
-                         rep_array(0.0, 0), // not needed real data
-                         rep_array(1, 1),// not needed int data
-                         1e-6, 1e-5, 1e3); // max steps
-  // Return relevant values
-  returnpar = N[1,2];// returns N- only
-  return returnpar;
-}
-
-real logdifffunction(real t,real tprev,real mu,real sigma){
-  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
-  if(is_nan(lambda)) {
-    print(t,\" \",tprev,\" \",mu,\" \",sigma);
-    lambda = -350;
+  Upois <- brms::get_dpar(prep, "mu", i = i)
+  mupois <- brms::get_dpar(prep, "mupois", i = i)
+  sigmapois <- brms::get_dpar(prep, "sigmapois", i = i)
+  mubin <- brms::get_dpar(prep, "mubin", i = i)
+  sigmabin <- brms::get_dpar(prep, "sigmabin", i = i)
+  Ubin <- brms::get_dpar(prep, "Ubin", i = i)
+  t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  tprev <- prep$data$vreal2[i]
+  exposure <- prep$data$vreal3[i]
+  N_est = c()
+  lambda = c()
+  for (j in 1:prep$ndraws){
+    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubin[j],log(60)-2.3*sigmapois[j]-exp(mupois[j]),sigmapois[j],log(60)-2.3*sigmabin[j]-exp(mubin[j]),sigmabin[j])
+    lambda[j]= exp(log(exposure) - log(1e7)+ log(Upois[j]) +logdifffunction( t, tprev, log(60)-2.3*sigmapois[j]-exp(mupois[j]), sigmapois[j]))
   }
-  return lambda;
+  
+  rpois(prep$ndraws,N_est)# rpois(prep$ndraws,lambda))
 }
 
-real sharedpars_lpmf(int Nposincrement,
-                          real Ubin,
-                          real mubin,
-                          real sigmabin,
-                          real Upois,
-                          real mupois,
-                          real sigmapois,
-                          int Nprev,
-                          int N,
-                          real t,
-                          real tprev,
-                          real exposure
-                          ){
-    real p1;
-    real p2;
-    //p= Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|mubin,sigmabin), lognormal_lccdf(t|mubin,sigmabin)));// alternative approx
-    p1=fmax(1e-20,N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin));
-    if(is_nan(p1)==1){
-      print(t,\" \",Upois,\" \",Ubin,\" \",mupois,\" \",sigmapois,\" \",mubin,\" \",sigmabin);
-      p1= 1e-20; //error trap for some extreme initial conditions
-    } 
-    p2 = log(Upois) + logdifffunction(t,tprev,mupois,sigmapois);
-    return poisson_lpmf(N|p1) + poisson_log_lpmf(Nposincrement|p2);
+library(tidybayes)
+library(plotly)
+library(ggplot2)
+library(patchwork)# allows for the side by side charting process that you see below
+predN <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==1,year ==5))
 
+posterior_predict_sharedpars_exposure <- function(i, prep, ...) {
+  # lambda = N_int(t,Upois,Ubin,mupois,sigmapois,mubin,sigmabin)
+  # this is the current, most basic, approximate method for generating an estimate of N. 
+  
+  Upois <- brms::get_dpar(prep, "mu", i = i)
+  mupois <- brms::get_dpar(prep, "mupois", i = i)
+  sigmapois <- brms::get_dpar(prep, "sigmapois", i = i)
+  mubin <- brms::get_dpar(prep, "mubin", i = i)
+  sigmabin <- brms::get_dpar(prep, "sigmabin", i = i)
+  Ubin <- brms::get_dpar(prep, "Ubin", i = i)
+  t <- prep$data$vreal1[i] # vint(Nprev,N)+vreal(t,tprev)
+  tprev <- prep$data$vreal2[i]
+  exposure <- prep$data$vreal3[i]
+  N_est = c()
+  lambda = c()
+  for (j in 1:prep$ndraws){
+    N_est[j] = N_int(t,Upois[j]*exposure*1e-7,Ubin[j],log(60)-2.3*sigmapois[j]-exp(mupois[j]),sigmapois[j],log(60)-2.3*sigmabin[j]-exp(mubin[j]),sigmabin[j])
+    lambda[j]= exp(log(exposure) - log(1e7)+ log(Upois[j]) +logdifffunction( t, tprev, log(60)-2.3*sigmapois[j]-exp(mupois[j]), sigmapois[j]))
+  }
+  
+  rpois(prep$ndraws,lambda)
 }
 
 
-real lognormal_lccdf_mod(real a,real b,real c){
-  return lognormal_lccdf(a|b,c);
-}
+predNpos <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==1,year ==5))
 
+N_plot = predN%>%filter(segment==1,year ==5)%>%
+   ggplot(aes(x = t, y = .prediction)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+ geom_point(data = predN%>%filter(segment==1,year ==5), aes(t, N))
 
+N_pos_plot = predNpos%>%filter(segment==1,year ==5)%>%
+  group_by(.draw)%>%
+  mutate(N_pos_cum_sample = cumsum(.prediction))%>%ungroup()%>%
+   ggplot(aes(x = t, y = N_pos_cum_sample)) +
+  stat_lineribbon() +
+  scale_fill_brewer() +
+ geom_point(data = stan_data_multisegment%>%filter(segment==1,year ==5), aes(t, N_pos_cum))
 
-"
+N_plot + N_pos_plot
 ```
 
-```{r}
-library(brms)
-#testbrms = brm(y~1,data=data.frame(y=rnorm(100,0,2)), backend = "cmdstan")
-triangles_priors = get_prior(formula,stanvars = stanvar(scode = stan_functions, block = "functions"),data = stan_data_multisegment)
-
-stancode_pll = make_stancode(formula,
-  prior = mypriors,
-  stanvars = stanvar(scode = stan_functions, block = "functions"),
-  data = stan_data_multisegment, 
-  threads = threading(6),
-  backend = "cmdstan")
-```
-
-```{r}
-
-model_triangles_pll = brm(
-  formula,
-  prior = mypriors,
-  stanvars = stanvar(scode = stan_functions, block = "functions"),
-  data = stan_data_multisegment, 
-  backend = "cmdstan",
-  #threads = threading(6),
-  control = list(adapt_delta = 0.99),
-  seed = 1234,
-  refresh = 20,
-  iter = 20, 
-  init = 0,
-  chains = 1, cores = 6
-  #file = "frequencyCMDStan3.rds"
-  )
-```
