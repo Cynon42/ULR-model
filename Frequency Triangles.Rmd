@@ -922,13 +922,14 @@ real sharedpars_exposure_lpmf(int Nposincrement,
                           real tprev,
                           real exposure
                           ){
-
+    real lambda;
     // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
     // 2.3 is the z-score for the 99th percentile, mu must be less than this figure to be at least 99% developed by month 60
     //mupois = log(60)-2.3*sigmapois-exp(mupois);
     //mubin = log(60)-2.3*sigmabin-exp(mubin);
-
-    return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,log(60)-2.3*sigmapois-exp(mupois),sigmapois,log(60)-2.3*sigmabin-exp(mubin),sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
+    lambda = N_int(t,Upois*exposure*1e-7,Ubin,log(60)-2.3*sigmapois-exp(mupois),sigmapois,log(60)-2.3*sigmabin-exp(mubin),sigmabin);
+    lambda = log(1+exp(10.0*lambda))/10.0;//softplus on N so that it cannot be negative
+    return poisson_lpmf(N|lambda) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
 
 }
 
