@@ -508,12 +508,12 @@ The formula can now be made more versatile to account for trending in developmen
 ```{r}
 library(brms)
 # writing the formula for the model making use of time and segmentation of the data
-formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|id2|year_segment),
-     mupois~(1|id2|year_segment),
-     sigmapois~(1|id2|year_segment),
-     mubin~ (1|id2|year_segment),
-     Ubin ~(1|id2|year_segment) ,
-     sigmabin~(1|id2|year_segment),
+formula_exposure <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|segment)+(1|year_segment),
+                                                                       mupois~   (1|segment)+(1|year_segment),
+                                                                       sigmapois~(1|segment)+(1|year_segment),
+                                                                       mubin~    (1|segment)+(1|year_segment),
+                                                                       Ubin ~    (1|segment)+(1|year_segment) ,
+                                                                       sigmabin~ (1|segment)+(1|year_segment),
      family = sharedpars_exposure)
 
 # specify std normal non-centred priors
@@ -522,7 +522,7 @@ mypriors <- c(
   #prior(normal(0, 1), class = "Intercept"),
   #prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
   #prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
-  #prior(normal(0, 1), class = "Intercept", dpar = "mupois"),
+  prior(normal(-10, 5), class = "Intercept", dpar = "mupois")
   #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
   )
 ```
@@ -790,9 +790,28 @@ we note that recent years are failing for some reason. Lets check in more detail
 ```{r}
 library(brms)
 library(dplyr)
+
+model_triangles_exposure = brm(
+  formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_exposure, block = "functions"),
+  data = stan_data_multisegment, 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=12,
+  seed = 1235,
+  refresh = 1,
+  iter = 100, 
+  warmup = 50,
+  init = 0,
+  chains = 1, cores = 12,silent=2,
+  #file = "frequencyCMDStan3.rds"
+  )
+
 model_library = list()
 
-for (i in unique(stan_data_multisegment$year_segment)[1:3]){
+for (i in unique(stan_data_multisegment$year_segment)){
   model_library[i] = brm(
   formula_exposure,
   prior = mypriors,
@@ -803,9 +822,9 @@ for (i in unique(stan_data_multisegment$year_segment)[1:3]){
   control = list(adapt_delta = 0.99),
   max_treedepth=12,
   seed = 1235,
-  refresh = 1,
-  iter = 2, 
-  warmup = 1,
+  refresh = 0,
+  iter = 50, 
+  warmup = 25,
   init = 0,
   chains = 1, cores = 12,silent=2,
   #file = "frequencyCMDStan3.rds"
@@ -814,3 +833,134 @@ for (i in unique(stan_data_multisegment$year_segment)[1:3]){
 }
 
 ```
+# some work to increase performance
+remove unnecessary components of the ODE functions
+
+
+```{r}
+stan_functions_streamlined = "// we solve for #>0 at any point in time t  
+
+// modify signature for calls from the integrator to output N
+real[] N_ode_int(real t, 
+                  real [] N,  //  N 
+                  real [] theta, // model parameters
+              real [] x_r, int[] x_i
+             ) {
+    real dNdt[1];
+    real U = theta[1];
+    real U_p = theta[2];
+    real mu = theta[3];
+    real sigma = theta[4];
+    real mu_p = theta[5];
+    real sigma_p = theta[6];
+    
+    dNdt[1] = U*exp(lognormal_lpdf(t|mu,sigma))-N[1]*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
+    return dNdt;
+}
+
+// Integrate ODE to solve for N at a point in time 
+real N_int(real t,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[1];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 1];   // ODE solution at time t
+  real returnpar;
+  
+  // Set initial values. There should be no claims initially
+  N0[1] = 0.0; //cannot be zero in this version as we use log N
+  
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  
+  
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N  at t=0
+                         0.0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-2, 1e-2, 1e3); // max steps
+  // Return relevant values
+  returnpar = N[1,1];// returns N only
+  return returnpar;
+}
+
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+  if(is_nan(lambda)) {
+    print(t,\" \",tprev,\" \",mu,\" \",sigma);
+    lambda = -350;
+  }
+  return lambda;
+}
+
+real sharedpars_exposure_lpmf(int Nposincrement,
+                          real Upois,
+                          real mupois,
+                          real sigmapois,
+                          real Ubin,
+                          real mubin,
+                          real sigmabin,
+                          int Nprev,
+                          int N,
+                          real t,
+                          real tprev,
+                          real exposure
+                          ){
+
+    // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
+    // 2.3 is the z-score for the 99th percentile, mu must be less than this figure to be at least 99% developed by month 60
+    //mupois = log(60)-2.3*sigmapois-exp(mupois);
+    //mubin = log(60)-2.3*sigmabin-exp(mubin);
+
+    return poisson_lpmf(N|N_int(t,Upois*exposure*1e-7,Ubin,log(60)-2.3*sigmapois-exp(mupois),sigmapois,log(60)-2.3*sigmabin-exp(mubin),sigmabin)) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
+
+}
+
+
+real lognormal_lccdf_mod(real a,real b,real c){
+  return lognormal_lccdf(a|b,c);
+}
+
+
+
+"
+```
+
+```{r}
+library(brms)
+library(dplyr)
+model_triangles_streamlined = brm(
+  formula_exposure,
+  prior = mypriors,
+  stanvars = stanvar(scode = stan_functions_streamlined, block = "functions"),
+  data = stan_data_multisegment%>%filter(as.numeric(segment)==1), 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  seed = 1234,
+  refresh = 1,
+  iter = 20, 
+  warmup = 10,
+  init = 0,
+  chains = 1, cores = 12,silent=2
+  #file = "frequencyCMDStan3.rds"
+  )
+```
+
