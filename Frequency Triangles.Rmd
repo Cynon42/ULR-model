@@ -761,7 +761,7 @@ library(ggplot2)
 library(patchwork)# allows for the side by side charting process that you see below
 
 selectedsegment=2
-selectedyear =10
+selectedyear =8
 
 posterior_predict_sharedpars_exposure = posterior_predict_sharedpars_exposure_N
 predN <- predicted_draws(model_triangles_exposure, newdata = stan_data_multisegment%>%filter(segment==selectedsegment,year ==selectedyear))
@@ -962,5 +962,14 @@ model_triangles_streamlined = brm(
   chains = 1, cores = 12,silent=2
   #file = "frequencyCMDStan3.rds"
   )
+```
+# track down the divergent transitions
+
+```{r}
+library(bayesplot)
+color_scheme_set("darkgray")
+mcmc_parcoord(model_triangles_streamlined, np = nuts_params(model_triangles_streamlined),transform = function(x) {(x - mean(x)) / sd(x)})
+
+
 ```
 
