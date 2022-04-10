@@ -1164,3 +1164,172 @@ model_triangles_binom_all_segments = brm(
   #file = "frequencyCMDStan3.rds"
   )
 ```
+
+
+# Further tweaking of the functions for binomial
+lets try to suggest that the poisson develops earlier and slower than the binomial i.e the mubin > mupoisson and sigmapoisson > sigmabin. This way the claim rejection process is contained to start developing later and develop at least as fast as the claim reserving process. 
+
+This was observed to be of benefit early on in the development process to contain unrealistic initial conditions.
+
+keeping these true no matter the initial conditions requires transforms to the parameters.
+
+```{r}
+stan_functions_binom_tweaked = "// we solve for #>0 at any point in time t  
+
+// modify signature for calls from the integrator to output N
+real[] N_ode_int(real t, 
+                  real [] N,  // both N and N_neg
+                  real [] theta, // model parameters
+              real [] x_r, int[] x_i
+             ) {
+    real dNdt[2];
+    real U = theta[1];
+    real U_p = theta[2];
+    real mu = theta[3];
+    real sigma = theta[4];
+    real mu_p = theta[5];
+    real sigma_p = theta[6];
+    
+    
+    dNdt[1] = U*exp(lognormal_lpdf(t|mu,sigma))-fmax(0.0,N[1])*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims >0
+    dNdt[2] = fmax(0.0,N[1])*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p));// gradient of cumulative # claims dropped back to zero
+    return dNdt;
+}
+
+// Integrate ODE to solve for N at a point in time 
+real N_int(real t,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution at time t
+  real returnpar;
+  
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  
+  
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0.0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  returnpar = N[1,1];// returns N only
+  return returnpar;
+}
+
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+  if(is_nan(lambda)) {
+    print(t,\" \",tprev,\" \",mu,\" \",sigma);
+    lambda = -350;
+  }
+  return lambda;
+}
+
+real sharedpars_exposure_lpmf(int Nposincrement,
+                          real Upois,
+                          real mupois,
+                          real sigmapois,
+                          real Ubin,
+                          real mubin,
+                          real sigmabin,
+                          int Nprev,
+                          int N,
+                          real t,
+                          real tprev,
+                          real exposure
+                          ){
+
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real Nest[2, 2];   // ODE solution at time t and tprev
+  real times[2]; 
+  int Nnegincrement=Nprev-N+Nposincrement;
+  
+  // Set initial values. There should be no claims initially
+  N0[1] = 0; 
+  N0[2] = 0;
+  // Set parameters
+  // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
+  // 2.3 is the z-score for the 99th percentile, mu must be less than this figure 
+  par[1] = Upois*exposure*1e-7;
+  par[2] = Ubin;
+  par[3] = log(60)-2.3*sigmapois-exp(mupois); 
+  par[4] = sigmapois;
+  par[5] = log(60)-2.3*sigmapois-exp(mupois)*inv_logit(mubin); // mubin > mupoisson
+  par[6] = sigmapois*inv_logit(sigmabin); // sigmapois > sigmabin
+  
+  times[1]=tprev;
+  times[2]=t;
+  
+  
+  // Solve ODEs 
+  Nest = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0.0, // initial t=0
+                         times, //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-2, 1, 1e5); // % tolerance, absolute tolerance and max steps
+ 
+  // binomial rate expressed as a percentage of the predicted Nprev 
+  // (Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1]))) or (expected Nnegincrement)/(average expected N to avoid inital condition errors)
+  return binomial_lpmf(Nnegincrement|Nprev,fmin(0.99,(Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1])))) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
+
+}
+
+
+real lognormal_lccdf_mod(real a,real b,real c){
+  return lognormal_lccdf(a|b,c);
+}
+
+
+
+"
+```
+
+# brms call for the tweaked binomial functions
+```{r}
+library(brms)
+library(dplyr)
+model_triangles_binom_tweaked = brm(
+  formula_binom,
+  prior = mypriors_binom,
+  stanvars = stanvar(scode = stan_functions_binom_tweaked, block = "functions"),
+  data = stan_data_multisegment, 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 1,
+  iter = 50, 
+  warmup = 30,
+  init = 0,
+  chains = 1, cores = 12,silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+```
