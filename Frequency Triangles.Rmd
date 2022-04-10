@@ -1266,6 +1266,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
   real Nest[2, 2];   // ODE solution at time t and tprev
   real times[2]; 
   int Nnegincrement=Nprev-N+Nposincrement;
+  real p;
   
   // Set initial values. There should be no claims initially
   N0[1] = 0; 
@@ -1285,6 +1286,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
   
   
   // Solve ODEs 
+  //print(t,\" \",tprev,\" \",par);
   Nest = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
                          N0, // N and N- at t=0
                          0.0, // initial t=0
@@ -1292,11 +1294,13 @@ real sharedpars_exposure_lpmf(int Nposincrement,
                          par,// set of parameters for ode function
                          rep_array(0.0, 0), // not needed real data
                          rep_array(1, 1),// not needed int data
-                         1e-2, 1, 1e5); // % tolerance, absolute tolerance and max steps
+                         1e-2, 1, 1e6); // % tolerance, absolute tolerance and max steps
  
   // binomial rate expressed as a percentage of the predicted Nprev 
   // (Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1]))) or (expected Nnegincrement)/(average expected N to avoid inital condition errors)
-  return binomial_lpmf(Nnegincrement|Nprev,fmin(0.99,(Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1])))) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
+  p = Ubin*exp(log_diff_exp(lognormal_lccdf(tprev|par[5],par[6]), lognormal_lccdf(t|par[5],par[6])));
+  p = 1-log(1+exp(10.0-10.0*p))/10.0;
+  return binomial_lpmf(Nnegincrement|Nprev,p) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
 
 }
 
@@ -1318,17 +1322,20 @@ model_triangles_binom_tweaked = brm(
   formula_binom,
   prior = mypriors_binom,
   stanvars = stanvar(scode = stan_functions_binom_tweaked, block = "functions"),
-  data = stan_data_multisegment, 
+  data = stan_data_multisegment%>%filter(t>2), 
   backend = "cmdstan",
   threads = threading(12),
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
   refresh = 1,
-  iter = 50, 
+  iter = 60, 
+  #output_samples = 1000,
   warmup = 30,
   init = 0,
-  chains = 1, cores = 12,silent=2,
+  chains = 1, 
+  cores = 12,
+  silent=2,
   #algorithm = "fullrank" # this uses variational inference rather than mcmc
   #file = "frequencyCMDStan3.rds"
   )
