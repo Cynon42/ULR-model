@@ -44,7 +44,15 @@ triangle = triangle %>%
   mutate(DevMth_prior = lag(DevMth,lag=1, default = 0.1))
 
 # get exposure data 
-exposure_table = eur.dat.cul.mth%>%select(-(7:23))%>% group_by(ReservingClass,YOA,Country,DevMth)%>%summarise_all(last)%>% group_by(ReservingClass,YOA,Country)%>%select(-2,-3,-6)%>%summarise(NetPrem = sum(NetPrem))
+exposure_table = eur.dat.cul.mth%>%select(-(7:23))%>%  
+  group_by(ReservingClass,EuropeanClass,SubClass,YOA,Country,DevMth)%>%
+  summarise_all(last)%>%
+  group_by(ReservingClass,EuropeanClass,SubClass,YOA,Country,DevMth)%>%
+  summarise(NetPrem = sum(NetPrem))%>%
+  group_by(ReservingClass,EuropeanClass,SubClass,YOA,Country)%>%arrange(DevMth)%>%
+  summarise_all(last)%>%
+  group_by(ReservingClass,YOA,Country)%>%
+  summarise(NetPrem = sum(NetPrem))
 
 triangle_inc_exposure = triangle %>% merge(exposure_table)
 

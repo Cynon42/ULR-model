@@ -1103,7 +1103,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
  
   // binomial rate expressed as a percentage of the predicted Nprev 
   // (Nest[2,2]-Nest[1,2])/Nest[1,1]) or (expected Nnegincrement)/(expected Nprev)
-  return binomial_lpmf(Nnegincrement|Nprev,fmin(0.99,(Nest[2,2]-Nest[1,2])/Nest[1,1])) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
+  return binomial_lpmf(Nnegincrement|Nprev,fmax(1e-10,fmin(0.99,(Nest[2,2]-Nest[1,2])/Nest[1,1]))) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
 
 }
 
@@ -1144,21 +1144,21 @@ mypriors_binom <- c(
 ```{r}
 library(brms)
 library(dplyr)
-model_triangles_binom = brm(
+model_triangles_binom_all_segments = brm(
   formula_binom,
   prior = mypriors_binom,
   stanvars = stanvar(scode = stan_functions_binom, block = "functions"),
-  data = stan_data_multisegment%>%filter(as.numeric(segment)<3), 
+  data = stan_data_multisegment, 
   backend = "cmdstan",
-  threads = threading(12),
+  threads = threading(16),
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   seed = 1235,
   refresh = 1,
-  iter = 60, 
-  warmup = 30,
+  iter = 100, 
+  warmup = 50,
   init = 0,
-  chains = 1, cores = 12,silent=2,
+  chains = 4, cores = 64,silent=2,
   #file = "frequencyCMDStan3.rds"
   )
 ```
