@@ -1316,6 +1316,172 @@ model_triangles_binom_tweaked = brm(
   max_treedepth=20,
   #seed = 1235,
   refresh = 1,
+  iter = 200, 
+  #output_samples = 1000,
+  warmup = 100,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+```
+# functions for binomial with logspace ODE such that N cannot be <0
+
+```{r}
+stan_functions_binom_lnN = "// we solve for #>0 at any point in time t  
+
+// modify signature for calls from the integrator to output N
+real[] N_ode_int(real t, 
+                  real [] lnN,  // both N and N_neg in log space
+                  real [] theta, // model parameters
+              real [] x_r, int[] x_i
+             ) {
+    real dlnNdt[2];
+    real U = theta[1];
+    real U_p = theta[2];
+    real mu = theta[3];
+    real sigma = theta[4];
+    real mu_p = theta[5];
+    real sigma_p = theta[6];
+    
+    
+    dlnNdt[1] = (U*exp(lognormal_lpdf(t|mu,sigma))-exp(lnN[1])*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p)))/exp(lnN[1]);// gradient of log cumulative # claims >0
+    dlnNdt[2] = exp(lnN[1])*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p))/exp(lnN[2]);// gradient of log cumulative # claims dropped back to zero
+    return dlnNdt;
+}
+
+// Integrate ODE to solve for N at a point in time 
+real N_int(real t,
+        real U,
+        real U_p,
+        real mu,
+        real sigma,
+        real mu_p,
+        real sigma_p
+        ) {
+  real N0[2];     // Initial values
+  real par[6];  // Parameters
+  real N[1, 2];   // ODE solution at time t
+  real returnpar;
+  
+  // Set initial values. There should be no claims initially
+  N0[1] = -1e6; 
+  N0[2] = -1e6;
+  // Set parameters
+  par[1] = U;
+  par[2] = U_p;
+  par[3] = mu; 
+  par[4] = sigma;
+  par[5] = mu_p; 
+  par[6] = sigma_p;
+  
+  
+  
+  // Solve ODEs 
+  //array[,] real integrate_ode_rk45(function ode, array[] real initial_state, real initial_time, array[] real times, array[] real theta, array[] real x_r, array[] int x_i, real rel_tol, real abs_tol, int max_num_steps)
+  N = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         N0, // N and N- at t=0
+                         0.0, // initial t=0
+                         rep_array(t, 1), //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-6, 1e-5, 1e3); // max steps
+  // Return relevant values
+  returnpar = N[1,1];// returns N only
+  return returnpar;
+}
+
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+  if(is_nan(lambda)) {
+    print(t,\" \",tprev,\" \",mu,\" \",sigma);
+    lambda = -350;
+  }
+  return lambda;
+}
+
+real sharedpars_exposure_lpmf(int Nposincrement,
+                          real Upois,
+                          real mupois,
+                          real sigmapois,
+                          real Ubin,
+                          real mubin,
+                          real sigmabin,
+                          int Nprev,
+                          int N,
+                          real t,
+                          real tprev,
+                          real exposure
+                          ){
+
+  real lnN0[2];     // Initial values
+  real par[6];  // Parameters
+  real lnNest[2, 2];   // ODE solution at time t and tprev
+  real times[2]; 
+  int Nnegincrement=Nprev-N+Nposincrement;
+  
+  // Set initial values. There should be no claims initially, but we will settle for a very negative number
+  lnN0[1] = -1e10; 
+  lnN0[2] = -1e10;
+  // Set parameters
+  // transform development mu such that 99% development at 60 months of development mu = log(x)-2.3*sigma
+  // 2.3 is the z-score for the 99th percentile, mu must be less than this figure 
+  par[1] = Upois*exposure*1e-7;
+  par[2] = Ubin;
+  par[3] = log(60)-2.3*sigmapois-exp(mupois); 
+  par[4] = sigmapois;
+  par[5] = log(60)-2.3*sigmabin-exp(mubin); 
+  par[6] = sigmabin;
+  
+  times[1]=tprev;
+  times[2]=t;
+  
+  
+  // Solve ODEs 
+  lnNest = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
+                         lnN0, // N and N- at t=0
+                         0.0, // initial t=0
+                         times, //array of times at which to find N
+                         par,// set of parameters for ode function
+                         rep_array(0.0, 0), // not needed real data
+                         rep_array(1, 1),// not needed int data
+                         1e-2, 1, 1e5); // % tolerance, absolute tolerance and max steps
+ 
+  // binomial rate expressed as a percentage of the predicted Nprev 
+  // (Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1]))) or (expected Nnegincrement)/(average expected N to avoid inital condition errors)
+  return binomial_lpmf(Nnegincrement|Nprev,fmin(0.99,(exp(lnNest[2,2])-exp(lnNest[1,2]))/(0.5*(exp(lnNest[1,1])+exp(lnNest[2,1]))))) + poisson_log_lpmf(Nposincrement|log(exposure) - log(1e7)+ log(Upois) + log_diff_exp(lognormal_lccdf(tprev|log(60)-2.3*sigmapois-exp(mupois),sigmapois), lognormal_lccdf(t|log(60)-2.3*sigmapois-exp(mupois),sigmapois)));
+
+}
+
+
+real lognormal_lccdf_mod(real a,real b,real c){
+  return lognormal_lccdf(a|b,c);
+}
+
+
+
+"
+```
+
+# brms call for binomial with lnN ODE
+
+```{r}
+library(brms)
+library(dplyr)
+model_triangles_binom_lnN = brm(
+  formula_binom,
+  prior = mypriors_binom,
+  stanvars = stanvar(scode = stan_functions_binom_lnN, block = "functions"),
+  data = stan_data_multisegment, 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 1,
   iter = 60, 
   #output_samples = 1000,
   warmup = 30,
