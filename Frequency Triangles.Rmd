@@ -1348,7 +1348,7 @@ real[] N_ode_int(real t,
     
     
     dlnNdt[1] = (U*exp(lognormal_lpdf(t|mu,sigma))-exp(lnN[1])*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p)))/exp(lnN[1]);// gradient of log cumulative # claims >0
-    dlnNdt[2] = exp(lnN[1])*U_p*exp(lognormal_lpdf(t|mu_p,sigma_p))/exp(lnN[2]);// gradient of log cumulative # claims dropped back to zero
+    dlnNdt[2] = 0;// gradient of log cumulative # claims dropped back to zero
     //print(t,\" \",dlnNdt,\" \",theta,\" \",lnN);
     return dlnNdt;
 }
@@ -1387,7 +1387,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
   
   // Set initial values. There should be no claims initially, but we will derive expected N at t=1
   lnN0[1] = log(par[1])+lognormal_lcdf(1.0|par[3],par[4]); 
-  lnN0[2] = lnN0[1]-3.0;
+  lnN0[2] = 0;
   
   times[1]=tprev;
   times[2]=t;
@@ -1402,11 +1402,14 @@ real sharedpars_exposure_lpmf(int Nposincrement,
                          rep_array(0.0, 0), // not needed real data
                          rep_array(1, 1),// not needed int data
                          1e-2, 1, 1e6); // % tolerance, absolute tolerance and max steps
- 
+ lnNest[1,1]=exp(lnNest[1,1]);
+ lnNest[2,1]=exp(lnNest[2,1]);
+ lnNest[1,2]= par[1]*exp(lognormal_lcdf(tprev|par[3],par[4]))-lnNest[1,1];
+ lnNest[2,2]= par[1]*exp(lognormal_lcdf(t|par[3],par[4]))-lnNest[2,1];
  //print(t,\" \",exp(lnNest));
   // binomial rate expressed as a percentage of the predicted Nprev 
   // (Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1]))) or (expected Nnegincrement)/(average expected N to avoid inital condition errors)
-  return binomial_lpmf(Nnegincrement|Nprev,fmax(1e-100,fmin(0.99,(exp(lnNest[2,2])-exp(lnNest[1,2]))/(0.5*(exp(lnNest[1,1])+exp(lnNest[2,1])))))) + poisson_log_lpmf(Nposincrement|log(par[1]) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
+  return binomial_lpmf(Nnegincrement|Nprev,fmax(1e-100,fmin(0.99,(lnNest[2,2]-lnNest[1,2])/(0.5*(lnNest[1,1]+lnNest[2,1]))))) + poisson_log_lpmf(Nposincrement|log(par[1]) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
 
 }
 
