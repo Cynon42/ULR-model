@@ -1373,6 +1373,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
   real lnNest[2, 2];   // ODE solution at time t and tprev
   real times[2]; 
   int Nnegincrement=Nprev-N+Nposincrement;
+  real t0; // minimum time being considered
   
   
   // Set parameters
@@ -1380,28 +1381,31 @@ real sharedpars_exposure_lpmf(int Nposincrement,
   // 2.3 is the z-score for the 99th percentile, mu must be less than this figure 
   par[1] = Upois*exposure*1e-7;
   par[2] = Ubin;
-  par[3] = log(60)-2.3*sigmapois-exp(mupois); 
+  par[3] = fmin(log(60)-2.3*sigmapois-exp(mupois),log(3)+2.3*sigmapois-exp(mupois)); 
   par[4] = sigmapois;
   par[5] = log(60)-2.3*sigmapois-exp(mupois)*inv_logit(mubin); // mubin > mupoisson
   par[6] = sigmapois*inv_logit(sigmabin); // sigmapois > sigmabin
   
+  // set t0 such that the earlies time being considered is at 1% of development or higher
+  t0 = exp(par[3]-2.3*par[4]);
   // Set initial values. There should be no claims initially, but we will derive expected N at t=1
-  lnN0[1] = log(par[1])+lognormal_lcdf(1.0|par[3],par[4]); 
+  lnN0[1] = log(par[1])+lognormal_lcdf(t0|par[3],par[4]); 
   lnN0[2] = 0;
   
   times[1]=tprev;
   times[2]=t;
   
   
-  // Solve ODEs 
-  lnNest = integrate_ode_bdf(N_ode_int, //function that will receicve par as input
+    // Solve ODEs 
+    lnNest = integrate_ode_rk45(N_ode_int, //function that will receicve par as input
                          lnN0, // N and N- at t=0
-                         1.0, // initial t=1 to avoid initial condition issues
+                         t0, // initial t=1 to avoid initial condition issues
                          times, //array of times at which to find N
                          par,// set of parameters for ode function
                          rep_array(0.0, 0), // not needed real data
                          rep_array(1, 1),// not needed int data
                          1e-2, 1, 1e6); // % tolerance, absolute tolerance and max steps
+  
  lnNest[1,1]=exp(lnNest[1,1]);
  lnNest[2,1]=exp(lnNest[2,1]);
  lnNest[1,2]= par[1]*exp(lognormal_lcdf(tprev|par[3],par[4]))-lnNest[1,1];
@@ -1409,15 +1413,10 @@ real sharedpars_exposure_lpmf(int Nposincrement,
  //print(t,\" \",exp(lnNest));
   // binomial rate expressed as a percentage of the predicted Nprev 
   // (Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1]))) or (expected Nnegincrement)/(average expected N to avoid inital condition errors)
-  return binomial_lpmf(Nnegincrement|Nprev,fmax(1e-100,fmin(0.99,(lnNest[2,2]-lnNest[1,2])/(0.5*(lnNest[1,1]+lnNest[2,1]))))) + poisson_log_lpmf(Nposincrement|log(par[1]) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
+  return poisson_lpmf(Nnegincrement|fmax(1e-100,(lnNest[2,2]-lnNest[1,2]))) + poisson_log_lpmf(Nposincrement|log(par[1]) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
+ 
 
 }
-
-
-real lognormal_lccdf_mod(real a,real b,real c){
-  return lognormal_lccdf(a|b,c);
-}
-
 
 
 "
@@ -1432,7 +1431,7 @@ model_triangles_binom_lnN = brm(
   formula_binom,
   prior = mypriors_binom,
   stanvars = stanvar(scode = stan_functions_binom_lnN, block = "functions"),
-  data = stan_data_multisegment%>%filter(tprev>2), 
+  data = stan_data_multisegment%>%filter(tprev>4), 
   backend = "cmdstan",
   threads = threading(12),
   control = list(adapt_delta = 0.99),
@@ -1442,7 +1441,7 @@ model_triangles_binom_lnN = brm(
   iter = 60, 
   #output_samples = 1000,
   warmup = 30,
-  #init = 0,
+  init = 0,
   chains = 1, 
   cores = 12,
   silent=2,
