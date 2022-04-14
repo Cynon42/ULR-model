@@ -1,0 +1,93 @@
+---
+title: "severity Model"
+output: html_notebook
+---
+
+We now turn to the severity model to predict average cost per claim (ACPC). We will use the canonical growth curve on incremental ACPC changes as our starting point. This data is already available. 
+
+# Data Prep
+First test the severity data for uniqueness across reserving class.
+
+```{r}
+library(dplyr)
+length(unique(eur.dat.cul.mth$NetPrem))
+eur.dat.cul.mth%>%group_by(ReservingClass,YOA,SubClass)%>%summarise_all(last)%>%length()# length not the same
+eur.dat.cul.mth%>%mutate(factor_net_prem = factor(NetPrem))%>%group_by(factor_net_prem)%>%summarise_all(last)%>%arrange(ReservingClass,YOA)%>%View()
+# 
+```
+
+inspection reveals an additional subclass of cyber, and that "other" seems to be doubled up in terms of the number of unique premiums.
+Conclusion: we preprocess and average in the cyber and non-unique other premiums, but summarise on reserving class.Only one country at the moment
+
+```{r}
+severity_data = eur.dat.cul.mth%>%group_by(Country,ReservingClass,YOA,DevMth)%>%
+  summarise(nzClm = sum(nzClm), Incurred=sum(Incurred))%>%
+  mutate(ACPC = Incurred/nzClm,Country=factor(Country),ReservingClass=factor(ReservingClass))%>%
+  filter(nzClm>0,Incurred>0)%>%
+  arrange(Country,ReservingClass,YOA,DevMth)%>%
+  mutate(ACPC_increment = ACPC - lag(ACPC, lag = 1, default = 0), 
+         DevMthprev = lag(DevMth,lag = 1, default=0.1),
+         year_segment = factor(paste0(ReservingClass,"-",YOA))
+  )
+```
+# First model
+add the incrementals and try to model them using brms and growth curves
+```{r}
+library(brms)
+
+sev_functions = "
+  real lognormal_lcdf_mod(real a,real b,real c){
+  return lognormal_lcdf(a|b,c);
+}
+
+"
+
+# writing the formula for the model 
+formula_sev <- bf(ACPC_increment  ~ exp(ult)*exp(log_diff_exp(lognormal_lcdf_mod(DevMth,mudev,sigmsdev),lognormal_lcdf_mod(DevMthprev,mudev,sigmadev)))
+                       ,sigma ~ (1+DevMth|ReservingClass)
+                       ,mudev ~ (1|ReservingClass)+(1|year_segment)
+                       ,sigmadev~ (1|ReservingClass)+(1|year_segment)
+                       ,ult~ (1|ReservingClass)+(1|year_segment)
+                       ,nl=TRUE
+                       )
+                               
+
+# specify std normal non-centred priors
+mypriors_sev <- c(
+  prior(normal(0, 5), class = "Intercept",  dpar = "sigma"),
+  prior(normal(0, 1), nlpar = "mudev"),
+  prior(normal(0, 1), nlpar = "sigmaedv"),
+  prior(normal(0, 5), nlpar = "ult")
+  #prior(normal(-10, 5), class = "Intercept", dpar = "mupois")
+  #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  )
+```
+
+# severity model run
+
+```{r}
+library(brms)
+library(dplyr)
+model_sev = brm(
+  formula_sev,
+  prior = mypriors_sev,
+  stanvars = stanvar(scode = sev_functions, block = "functions"),
+  data = severity_data, 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=10,
+  #seed = 1235,
+  refresh = 1,
+  iter = 60, 
+  #output_samples = 1000,
+  warmup = 30,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  )
+```
+
+
