@@ -250,9 +250,10 @@ model_triangles = brm(
   )
 ```
 
-# Introduce a new family such that there is only one loglikelihood
+# family definition 
+We define the family such that there is only one loglikelihood calculation rather than two separate components in the formula.
 
-having trouble with the complexity so I have to move in smaller steps. This is to introduce a single loglikelihood statement into stan using a new family definition. This will allow for parallel execution of the code.
+Having trouble with the complexity so I have to move in smaller steps. This is to introduce a single loglikelihood statement into stan using a new family definition. This will allow for parallel execution of the code.
 
 ```{r}
 
@@ -1449,9 +1450,95 @@ model_triangles_binom_lnN = brm(
   #file = "frequencyCMDStan3.rds"
   )
 ```
-
-Given the poor performance of this model. Particularly how slow it was running, I am onspired to look into data compression. In doing this I realised that claims in the tail are in regions where the expected frequency is low. In these regions, the variance is also low, so the likelihood distribution can be said to have high curvature. It has now become obvious to me that the data could easily be processed differently. It is likely a very good idea to group the reported claims into approximate deciles (or 20x5% groups). This would give no data points where the expected frequency was materially different to the others. This would reduce the possibility of high curvature in the model, possibly resulting in less divergent transitions and a faster model.
+# adding compression
+Given the poor performance of this model. Particularly how slow it was running, I am inspired to look into data compression. In doing this I realised that claims in the tail are in regions where the expected frequency is low. In these regions, the variance is also low, so the likelihood distribution can be said to have high curvature. It has now become obvious to me that the data could easily be processed differently. It is likely a very good idea to group the reported claims into approximate deciles (or 20x5% groups). This would give no data points where the expected frequency was materially different to the others. This would reduce the possibility of high curvature in the model, possibly resulting in less divergent transitions and a faster model.
 
 We will elect to group data into groups where approximately 5% of the development occurs.
 
-lets make an assumption that most development is relatively similar
+lets make an assumption that most development is relatively similar, so that we can group years together for those years that have reached beyond 60 months of development.
+
+See the sections in the data treatment code for the construction of the data we will now use.
+
+# simple formula Poisson only
+```{r}
+library(brms)
+formula_compressed = bf(N_group_increment ~ lambda + log(exposure),
+   nlf(lambda ~ U + logdifffunction(t,tprev,mudev,exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
+   mudev~ (1|id|model) + (1|id2|segment_model)+(1|id3|year_segment_model),
+   U ~(1|id|model) + (1|id2|segment_model)+(1|id3|year_segment_model),
+  sigmadev~(1|id|model) + (1|id2|segment_model)+(1|id3|year_segment_model),
+  family = poisson(),
+  nl=TRUE)
+
+
+# specify std normal non-centred priors
+mypriors_compressed <- c(
+  #prior(normal(0, 1), class = "Intercept",  dpar = "Ubin"),
+  #prior(normal(0, 1), class = "Intercept"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
+  #prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
+  #prior(normal(-10, 5), class = "Intercept", dpar = "mupois")
+  #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  )
+```
+
+# basic functions for compression
+```{r}
+stan_functions_compressed = "
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+  if(is_nan(lambda)) {
+    print(t,\" \",tprev,\" \",mu,\" \",sigma);
+    lambda = -350;
+  }
+  return lambda;
+}
+
+"
+```
+
+# brms call for compressed model
+
+```{r}
+library(brms)
+library(dplyr)
+model_freq_compressed = brm(
+  formula_compressed,
+  prior = mypriors_compressed,
+  stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
+  data = stan_data_compressed, 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 1,
+  iter = 60, 
+  #output_samples = 1000,
+  warmup = 30,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+```
+
+# compressed frequency family definition
+the data is now stacked such that one column contains incremental changes in either the Npos or Nneg because the timescale compression varies between the two models. We must define a new family and loglikelihood calculation to accept this information.
+
+```{r}
+
+library(brms)
+freq_compressed <- custom_family(
+                    "freq_compressed", dpars = c("mu","mupos","sigmapos","Uneg","muneg","sigmaneg"), # actually mu is really the Ubin for the binomial 
+                    links = c("log","identity","log","identity","identity","log"),
+                    type = "int",# lpmf vs lpdf
+                    vars = c("vint1[n]", # Nprev
+                             "vint2[n]", # N
+                             "vreal1[n]",# t
+                             "vreal2[n]"# tprev
+                             ) 
+              )
+```

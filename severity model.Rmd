@@ -58,13 +58,13 @@ formula_sev <- bf(ACPC_increment  ~ exp(ult)*exp(log_diff_exp(lognormal_lcdf_mod
 
 # specify std normal non-centred priors
 mypriors_sev <- c(
-  prior(normal(0, 5), class = "Intercept",  dpar = "sigma"),
+  #prior(normal(0, 5), class = "Intercept",  dpar = "sigma"),
   prior(normal(0, 1), nlpar = "mudev"),
   prior(normal(0, 1), nlpar = "sigmadev"),
   prior(normal(0, 5), nlpar = "ult"),
   prior(normal(0, 1),  nlpar = "sigmastd"),
   prior(normal(0, 1),  nlpar = "a"),
-  prior(normal(0, 1),  nlpar = "b"),
+  prior(normal(0, 1),  nlpar = "b")
   )
 ```
 

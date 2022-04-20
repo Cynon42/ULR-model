@@ -236,7 +236,7 @@ stan_data_multisegment_monthly_mu_sigma_pos = stan_data_multisegment_monthly %>%
          N = max(N),
          Nprev= min(Nprev),
          N_pos_cum=max(N_pos_cum)
-            )%>%rename(percentile_group=percentile_group_pos)%>%mutate(compression_group = "N_pos_increment")
+            )%>%rename(percentile_group=percentile_group_pos)%>%mutate(model = "N_pos_increment")
 
 stan_data_multisegment_monthly_mu_sigma_neg = stan_data_multisegment_monthly %>% merge(stan_data_mu_sigma)%>%
   mutate(percentile_pos = plnorm(tprev,mupos,sigmapos),percentile_neg = plnorm(tprev,muneg,sigmaneg))%>%
@@ -257,12 +257,14 @@ stan_data_multisegment_monthly_mu_sigma_neg = stan_data_multisegment_monthly %>%
          N = max(N),
          Nprev= min(Nprev),
          N_pos_cum=max(N_pos_cum)
-            )%>%rename(percentile_group=percentile_group_neg)%>%mutate(compression_group = "N_neg_increment")
+            )%>%rename(percentile_group=percentile_group_neg)%>%mutate(model = "N_neg_increment")
 
 
 stan_data_compressed = stan_data_multisegment_monthly_mu_sigma_neg %>% 
   bind_rows(stan_data_multisegment_monthly_mu_sigma_pos)%>%
-  mutate(year_segment_model = factor(paste0(year_segment,"-",compression_group)))
+  mutate(year_segment_model = factor(paste0(year_segment,"-",model)),
+         segment_model = factor(paste0(segment,"-",model))
+         )
 
 ```
 
