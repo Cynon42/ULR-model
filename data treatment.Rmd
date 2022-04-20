@@ -95,5 +95,180 @@ stan_data_multisegment = triangle_inc_exposure%>%ungroup()%>%
 
 ```
 
+We now introduce data compression. The implementation here is designed to take month end positions, then create a final data set where each data point contains about 5% of the movement.
+
+```{r}
+library(dplyr)
+library(tidyr)
+data_steps_monthly = nld.clm %>% 
+  group_by(ClaimNo,DevMth,Country,PolicyNo,OrigInception,Insured,TradeCode,TradeCodeDesc,ProductCode,ProductDescription,EuropeanClass,SubClass,ReservingClass,ClaimYOA,DateOfLoss,ImportDate,DateClosed,SelYOA,ReportDelay,TradeCodeDetailed)%>%
+  summarise(incurred_movement_monthend = sum(Incurred))%>%
+  mutate(currentdev = (2022-SelYOA)*12+2)%>%
+  arrange(ClaimNo,DevMth)%>%
+  group_by(ClaimNo,Country,PolicyNo,OrigInception,Insured,TradeCode,TradeCodeDesc,ProductCode,ProductDescription,EuropeanClass,SubClass,ReservingClass,ClaimYOA,DateOfLoss,ImportDate,DateClosed,SelYOA,ReportDelay,TradeCodeDetailed)%>%
+  mutate(currentdev = (2022-SelYOA)*12+2)%>% # add a calculation to give the maximum development that is available for that year
+  complete(DevMth=1:max(currentdev),fill = list(incurred_movement_monthend = 0))%>%# include all development months, including ones where nothing happened
+  arrange(ClaimNo,DevMth)%>%
+  group_by(ClaimNo,Country,PolicyNo,OrigInception,Insured,TradeCode,TradeCodeDesc,ProductCode,ProductDescription,EuropeanClass,SubClass,ReservingClass,ClaimYOA,DateOfLoss,ImportDate,DateClosed,SelYOA,ReportDelay,TradeCodeDetailed)%>%
+  mutate(incurred_cumulative = cumsum(incurred_movement_monthend))%>%
+  mutate(incurred_cumulative_prior = cumsum(incurred_movement_monthend)-incurred_movement_monthend)%>%
+  mutate(above5 = (incurred_cumulative>=5)*1,
+         above5_prior = (incurred_cumulative_prior>=5)*1)%>%
+  mutate(claim_increment = above5-above5_prior)%>%
+  mutate(positive_claim_increment = (claim_increment==1)*1,
+         negative_claim_increment = (claim_increment==-1)*1)
+  
+triangle_monthly = data_steps_monthly %>%filter(DevMth>0)%>%
+  group_by(Country,ReservingClass,SelYOA,DevMth)%>%
+  summarise(N_pos = sum(positive_claim_increment),N_neg = sum(negative_claim_increment),N=sum(claim_increment))%>%
+  group_by(SelYOA,ReservingClass,Country)%>%arrange(ReservingClass,Country,SelYOA,DevMth)%>%
+  mutate(N_pos_cum = cumsum(N_pos),N_neg_cum = cumsum(N_neg),N_cum=cumsum(N))
+
+triangle_monthly = triangle_monthly %>% 
+  group_by(Country,ReservingClass,SelYOA)%>%
+  arrange(Country,ReservingClass,SelYOA,DevMth)%>%rename(YOA=SelYOA)%>%
+  mutate(DevMth_prior = lag(DevMth,lag=1, default = 0.1))
+
+# get exposure data 
+exposure_table = eur.dat.cul.mth%>%select(-(7:23))%>%  
+  group_by(ReservingClass,EuropeanClass,SubClass,YOA,Country,DevMth)%>%
+  summarise_all(last)%>%
+  group_by(ReservingClass,EuropeanClass,SubClass,YOA,Country,DevMth)%>%
+  summarise(NetPrem = sum(NetPrem))%>%
+  group_by(ReservingClass,EuropeanClass,SubClass,YOA,Country)%>%arrange(DevMth)%>%
+  summarise_all(last)%>%
+  group_by(ReservingClass,YOA,Country)%>%
+  summarise(NetPrem = sum(NetPrem))
+
+triangle_inc_exposure_monthly = triangle_monthly %>% merge(exposure_table)
+
+stan_data_multisegment_monthly = triangle_inc_exposure_monthly%>%ungroup()%>%
+  mutate(year = YOA-min(YOA)+1,
+         exposure = NetPrem,
+         #segment = paste0(Country,"-",ReservingClass),
+         segment = factor(paste0(Country,"-",ReservingClass)),
+         #year_segment = paste0(segment,"-",YOA),
+         year_segment = factor(paste0(segment,"-",YOA))
+         )%>%
+  group_by(segment,year)%>% arrange(segment,year,DevMth)%>%
+  mutate(Nprev = lag(N_cum,lag=1, default = 0))%>%
+  rename(t = DevMth,
+         tprev = DevMth_prior,
+         N_neg_increment = N_neg,
+         N_pos_increment = N_pos,
+         N_increment = N,
+         country=Country,
+         reservingclass=ReservingClass,
+         N = N_cum
+         )%>%
+  filter(exposure>0)%>%ungroup()%>%
+  select(country,
+         reservingclass,
+         year,
+         segment,
+         exposure,
+         t,tprev,
+         N_neg_increment,
+         N_pos_increment,
+         N_increment,
+         N,Nprev,
+         N_pos_cum,
+         year_segment,
+         YOA
+         )
+    
+
+
+```
+
+now with a monthly triangulation. We use moment matching to approximate the development pattern for the positive reported claims.
+
+```{r}
+library(Hmisc)
+library(dplyr)
+stan_data_mu_sigma = stan_data_multisegment_monthly%>%
+  group_by(country,
+         reservingclass)%>%
+  filter(YOA<2018)%>% # all years remaining have more than 5 years of development on hand, which should cover 99% of the movements
+  summarise(mupos = weighted.mean(log(t-0.5),N_pos_increment),sigmapos = sqrt(wtd.var(log(t-0.5),N_pos_increment)),
+            muneg = weighted.mean(log(t-0.5),N_neg_increment),sigmaneg = sqrt(wtd.var(log(t-0.5),N_neg_increment)))# approximate development assuming lognormal
+
+# join the mu/sigma back onto the data
+
+stan_data_multisegment_monthly_mu_sigma = stan_data_multisegment_monthly %>% merge(stan_data_mu_sigma)%>%
+  mutate(percentile_pos = plnorm(tprev,mupos,sigmapos),percentile_neg = plnorm(tprev,muneg,sigmaneg))%>%
+  mutate(percentile_group_pos = (percentile_pos*100) %/% 5 +1,percentile_group_neg = (percentile_neg*100) %/% 5 +1)%>%
+  group_by(country,
+         reservingclass,
+         year,
+         segment,
+         year_segment,
+         YOA,
+         percentile_group_pos
+         )%>%
+  summarise(exposure = max(exposure),
+            t=max(t),
+            tprev=min(tprev),
+            N_neg_increment= sum(N_neg_increment),
+         N_pos_increment = sum(N_pos_increment),
+         N_increment= sum(N_increment),
+         N = max(N),
+         Nprev= min(Nprev),
+         N_pos_cum=max(N_pos_cum),
+            )
+
+stan_data_multisegment_monthly_mu_sigma_pos = stan_data_multisegment_monthly %>% merge(stan_data_mu_sigma)%>%
+  mutate(percentile_pos = plnorm(tprev,mupos,sigmapos),percentile_neg = plnorm(tprev,muneg,sigmaneg))%>%
+  mutate(percentile_group_pos = (percentile_pos*100) %/% 5 +1,percentile_group_neg = (percentile_neg*100) %/% 5 +1)%>%
+  group_by(country,
+         reservingclass,
+         year,
+         segment,
+         year_segment,
+         YOA,
+         percentile_group_pos
+         )%>%
+  summarise(exposure = max(exposure),
+            t=max(t),
+            tprev=min(tprev),
+            N_group_increment= sum(N_pos_increment),
+         N_increment= sum(N_increment),
+         N = max(N),
+         Nprev= min(Nprev),
+         N_pos_cum=max(N_pos_cum)
+            )%>%rename(percentile_group=percentile_group_pos)%>%mutate(compression_group = "N_pos_increment")
+
+stan_data_multisegment_monthly_mu_sigma_neg = stan_data_multisegment_monthly %>% merge(stan_data_mu_sigma)%>%
+  mutate(percentile_pos = plnorm(tprev,mupos,sigmapos),percentile_neg = plnorm(tprev,muneg,sigmaneg))%>%
+  mutate(percentile_group_pos = (percentile_pos*100) %/% 5 +1,percentile_group_neg = (percentile_neg*100) %/% 5 +1)%>%
+  group_by(country,
+         reservingclass,
+         year,
+         segment,
+         year_segment,
+         YOA,
+         percentile_group_neg
+         )%>%
+  summarise(exposure = max(exposure),
+            t=max(t),
+            tprev=min(tprev),
+            N_group_increment= sum(N_neg_increment),
+         N_increment= sum(N_increment),
+         N = max(N),
+         Nprev= min(Nprev),
+         N_pos_cum=max(N_pos_cum)
+            )%>%rename(percentile_group=percentile_group_neg)%>%mutate(compression_group = "N_neg_increment")
+
+
+stan_data_compressed = stan_data_multisegment_monthly_mu_sigma_neg %>% 
+  bind_rows(stan_data_multisegment_monthly_mu_sigma_pos)%>%
+  mutate(year_segment_model = factor(paste0(year_segment,"-",compression_group)))
+
+```
+
+
+
+
+
 
 

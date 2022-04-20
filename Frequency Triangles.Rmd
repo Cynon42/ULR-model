@@ -1125,9 +1125,9 @@ library(brms)
 formula_binom <- bf(N_pos_increment | vint(Nprev,N)+vreal(t,tprev,exposure) ~ (1|segment)+(1|year_segment),
                                                                        mupois~   (1|segment)+(1|year_segment),
                                                                        sigmapois~(1|segment)+(1|year_segment),
-                                                                       mubin~    (1|segment)+(1|year_segment),
-                                                                       Ubin ~    (1|segment)+(1|year_segment) ,
-                                                                       sigmabin~ (1|segment)+(1|year_segment),
+                                                                       mubin~    (1|segment)+t2(t,bs=c("ts") ),
+                                                                       Ubin ~    (1|segment)+t2(t,bs=c("ts") ) ,
+                                                                       sigmabin~ (1|segment)+t2(t,bs=c("ts") ),
      family = sharedpars_exposure)
 
 # specify std normal non-centred priors
@@ -1413,7 +1413,7 @@ real sharedpars_exposure_lpmf(int Nposincrement,
  //print(t,\" \",exp(lnNest));
   // binomial rate expressed as a percentage of the predicted Nprev 
   // (Nest[2,2]-Nest[1,2])/(0.5*(Nest[1,1]+Nest[2,1]))) or (expected Nnegincrement)/(average expected N to avoid inital condition errors)
-  return poisson_lpmf(Nnegincrement|fmax(1e-100,(lnNest[2,2]-lnNest[1,2]))) + poisson_log_lpmf(Nposincrement|log(par[1]) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
+  return poisson_lpmf(Nnegincrement|fmax(1e-100,lnNest[2,2]-lnNest[1,2])) + poisson_log_lpmf(Nposincrement|log(par[1]) + log_diff_exp(lognormal_lccdf(tprev|par[3],par[4]), lognormal_lccdf(t|par[3],par[4])));
  
 
 }
@@ -1449,3 +1449,9 @@ model_triangles_binom_lnN = brm(
   #file = "frequencyCMDStan3.rds"
   )
 ```
+
+Given the poor performance of this model. Particularly how slow it was running, I am onspired to look into data compression. In doing this I realised that claims in the tail are in regions where the expected frequency is low. In these regions, the variance is also low, so the likelihood distribution can be said to have high curvature. It has now become obvious to me that the data could easily be processed differently. It is likely a very good idea to group the reported claims into approximate deciles (or 20x5% groups). This would give no data points where the expected frequency was materially different to the others. This would reduce the possibility of high curvature in the model, possibly resulting in less divergent transitions and a faster model.
+
+We will elect to group data into groups where approximately 5% of the development occurs.
+
+lets make an assumption that most development is relatively similar
