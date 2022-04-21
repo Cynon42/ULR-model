@@ -1463,10 +1463,10 @@ See the sections in the data treatment code for the construction of the data we 
 ```{r}
 library(brms)
 formula_compressed = bf(N_group_increment ~ lambda + log(exposure),
-   nlf(lambda ~ U + logdifffunction(t,tprev,mudev,exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
-   mudev~ (1|id|model) + (1|id2|segment_model)+(1|id3|year_segment_model),
-   U ~(1|id|model) + (1|id2|segment_model)+(1|id3|year_segment_model),
-  sigmadev~(1|id|model) + (1|id2|segment_model)+(1|id3|year_segment_model),
+   nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
+   mudev~ (1|id|model) + (1|id2|segment_model)+(1|year_segment_model),
+   U ~(1|id|model) + (1|id2|segment_model)+(1|year_segment_model),
+  sigmadev~(1|id|model) + (1|id2|segment_model)+(1|year_segment_model),
   family = poisson(),
   nl=TRUE)
 
@@ -1486,12 +1486,7 @@ mypriors_compressed <- c(
 ```{r}
 stan_functions_compressed = "
 real logdifffunction(real t,real tprev,real mu,real sigma){
-  real lambda=log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
-  if(is_nan(lambda)) {
-    print(t,\" \",tprev,\" \",mu,\" \",sigma);
-    lambda = -350;
-  }
-  return lambda;
+  return log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
 }
 
 "
@@ -1506,16 +1501,18 @@ model_freq_compressed = brm(
   formula_compressed,
   prior = mypriors_compressed,
   stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
-  data = stan_data_compressed, 
+  data = stan_data_compressed%>%
+    filter(tprev>1,model=="N_pos_increment")%>%
+    mutate(exposure = exposure*1e-7), 
   backend = "cmdstan",
   threads = threading(12),
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
   refresh = 1,
-  iter = 60, 
+  iter = 200, 
   #output_samples = 1000,
-  warmup = 30,
+  warmup = 100,
   init = 0,
   chains = 1, 
   cores = 12,

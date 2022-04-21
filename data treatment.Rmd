@@ -265,6 +265,7 @@ stan_data_compressed = stan_data_multisegment_monthly_mu_sigma_neg %>%
   mutate(year_segment_model = factor(paste0(year_segment,"-",model)),
          segment_model = factor(paste0(segment,"-",model))
          )
+ 
 
 ```
 
