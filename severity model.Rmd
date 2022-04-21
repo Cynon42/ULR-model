@@ -45,10 +45,9 @@ sev_functions = "
 
 # writing the formula for the model 
 formula_sev <- bf(ACPC_increment  ~ exp(ult)*exp(log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)),lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
-                       ,nlf(sigma ~ exp(sigmastd)*exp(a)*exp(-exp(b)*DevMth))
-                        , sigmastd ~ (1|dev_year_segment)
-                        , a ~ (1|ReservingClass)
-                        , b ~ (1|ReservingClass)
+                        , nlf(sigma ~ exp(sigmastd-exp(b)*DevMth))
+                        , sigmastd ~ (1|ReservingClass)
+                        , b ~ 1
                        ,mudev ~ (1|ReservingClass)+(1|year_segment)
                        ,sigmadev~ (1|ReservingClass)+(1|year_segment)
                        ,ult~ (1|ReservingClass)+(1|year_segment)
@@ -63,7 +62,7 @@ mypriors_sev <- c(
   prior(normal(0, 1), nlpar = "sigmadev"),
   prior(normal(0, 5), nlpar = "ult"),
   prior(normal(0, 1),  nlpar = "sigmastd"),
-  prior(normal(0, 1),  nlpar = "a"),
+  #prior(normal(0, 1),  nlpar = "a"),
   prior(normal(0, 1),  nlpar = "b")
   )
 ```
@@ -76,23 +75,24 @@ library(dplyr)
 model_sev = brm(
   formula_sev,
   prior = mypriors_sev,
+  family = brmsfamily("gaussian",link = "identity",link_sigma = "identity"),
   stanvars = stanvar(scode = sev_functions, block = "functions"),
   data = severity_data, 
   backend = "cmdstan",
   threads = threading(12),
-  #control = list(adapt_delta = 0.99),
-  #max_treedepth=20,
-  seed = 1235,
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
   refresh = 1000,
   iter = 5000, 
-  output_samples = 1000,
-  #warmup = 2000,
-  #thin = 10,
+  #output_samples = 1000,
+  warmup = 2000,
+  thin = 10,
   init = 0,
   chains = 4, 
   cores = 12,
   silent=2,
-  algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
   )
 ```
 

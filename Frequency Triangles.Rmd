@@ -1502,7 +1502,7 @@ model_freq_compressed = brm(
   prior = mypriors_compressed,
   stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
   data = stan_data_compressed%>%
-    filter(tprev>1,model=="N_pos_increment")%>%
+    #filter(tprev>1,model=="N_pos_increment")%>%
     mutate(exposure = exposure*1e-7), 
   backend = "cmdstan",
   threads = threading(12),
@@ -1521,6 +1521,25 @@ model_freq_compressed = brm(
   #file = "frequencyCMDStan3.rds"
   )
 ```
+
+
+this is two orders of magnitude faster than the previous model, but still has divergences.
+
+
+# check out the divergences
+```{r}
+library(bayesplot)
+library(ggplot2)
+color_scheme_set("darkgray")
+mcmc_parcoord(model_freq_compressed, 
+              np = nuts_params(model_freq_compressed),transform = function(x) {(x - mean(x)) / sd(x)},
+              pars = vars(31:50)
+              )+theme(axis.text.x = element_text(angle = 90))
+
+
+```
+
+
 
 # compressed frequency family definition
 the data is now stacked such that one column contains incremental changes in either the Npos or Nneg because the timescale compression varies between the two models. We must define a new family and loglikelihood calculation to accept this information.
