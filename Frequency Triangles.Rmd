@@ -1539,6 +1539,7 @@ mypriors_compressed_neg <- c(
 ```
 
 #run the binomial model
+this is the approximate binomial model. To run it more accurately, the ODE version would be required.
 ```{r}
 library(brms)
 library(dplyr)
@@ -1572,9 +1573,9 @@ model_freq_compressed_neg = brm(
 library(bayesplot)
 library(ggplot2)
 color_scheme_set("gray")
-mcmc_parcoord(model_freq_compressed, 
-              np = nuts_params(model_freq_compressed),transform = function(x) {(x - mean(x)) / sd(x)},
-              pars = vars(1:5)
+mcmc_parcoord(model_freq_compressed_neg, 
+              np = nuts_params(model_freq_compressed_neg),transform = function(x) {(x - mean(x)) / sd(x)},
+              pars = vars(1:20)
               )+theme(axis.text.x = element_text(angle = 90))
 
 
@@ -1589,13 +1590,95 @@ the data is now stacked such that one column contains incremental changes in eit
 
 library(brms)
 freq_compressed <- custom_family(
-                    "freq_compressed", dpars = c("mu","mupos","sigmapos","Uneg","muneg","sigmaneg"), # actually mu is really the Ubin for the binomial 
-                    links = c("log","identity","log","identity","identity","log"),
+                    "freq_compressed", dpars = c("mu","lambdaneg"), # actually mu is really the lambdapos for the poisson 
+                    links = c("identity","log"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
                              "vint2[n]", # N
+                             "vint3[n]", # model flag where 1 = N_pos_increment
                              "vreal1[n]",# t
-                             "vreal2[n]"# tprev
+                             "vreal2[n]",# tprev
+                             "vreal3[n]"# exposure
                              ) 
               )
 ```
+
+# Combined formula for Poisson Binomial
+```{r}
+library(brms)
+formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(60)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=60
+   mupos + Upos + sigmapos~ (1|id2|segment)+(1|id|year_segment),
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(60)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial
+   muneg + Uneg + sigmaneg~ (1|id2|segment)+(1|id|year_segment),
+  family = freq_compressed,
+  nl=TRUE)
+
+
+# specify std normal non-centred priors
+mypriors_compressed_combined <- c(
+  prior(normal(0, 1),  nlpar = "Upos"),
+  prior(normal(0, 1),  nlpar = "mupos"),
+  prior(normal(0, 1),  nlpar = "sigmapos"),
+  prior(normal(0, 1),  nlpar = "Uneg"),
+  prior(normal(0, 1),  nlpar = "muneg"),
+  prior(normal(0, 1),  nlpar = "sigmaneg")
+  )
+```
+
+# functions expanded for combined compression model
+```{r}
+stan_functions_compressed_combined = "
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  return log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+}
+
+real sharedpars_exposure_lpmf(int Nincrement,
+                          real lambdapos,
+                          real lambdaneg,
+                          int Nprev,
+                          int N,
+                          int flag,
+                          real t,
+                          real tprev,
+                          real exposure
+                          ){
+
+    return flag==0 ? binomial_lpmf(Nincrement|N+Nincrement,lambdaneg) : poisson_log_lpmf(Nincrement|lambdapos);
+// note the use of poisson_log_lpmf as it is more accurate and we use identity link for lambdapos
+}
+
+"
+```
+
+#run the combined model
+this is still the approximate binomial model. To run it more accurately, the ODE version would be required.
+```{r}
+library(brms)
+library(dplyr)
+model_freq_compressed_combined = brm(
+  formula_compressed_combined,
+  prior = mypriors_compressed_combined,
+  stanvars = stanvar(scode = stan_functions_compressed_combined, block = "functions"),
+  data = stan_data_compressed%>%
+    filter(model=="N_pos_increment")%>%
+    mutate(exposure = exposure*1e-7,
+           modelflag = (model=="N_pos_increment")*1),
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 50,
+  iter = 500, 
+  #output_samples = 1000,
+  warmup = 250,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+```
+
