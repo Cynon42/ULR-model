@@ -1633,7 +1633,7 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
   return log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
 }
 
-real sharedpars_exposure_lpmf(int Nincrement,
+real freq_compressed_lpmf(int Nincrement,
                           real lambdapos,
                           real lambdaneg,
                           int Nprev,
@@ -1661,7 +1661,6 @@ model_freq_compressed_combined = brm(
   prior = mypriors_compressed_combined,
   stanvars = stanvar(scode = stan_functions_compressed_combined, block = "functions"),
   data = stan_data_compressed%>%
-    filter(model=="N_pos_increment")%>%
     mutate(exposure = exposure*1e-7,
            modelflag = (model=="N_pos_increment")*1),
   backend = "cmdstan",
