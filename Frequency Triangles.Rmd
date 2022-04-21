@@ -1459,26 +1459,21 @@ lets make an assumption that most development is relatively similar, so that we 
 
 See the sections in the data treatment code for the construction of the data we will now use.
 
-# simple formula Poisson only
+# simple formula Poisson only for the positive claims
 ```{r}
 library(brms)
 formula_compressed = bf(N_group_increment ~ lambda + log(exposure),
    nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
-   mudev~ (1|id|model) + (1|id2|segment_model)+(1|year_segment_model),
-   U ~(1|id|model) + (1|id2|segment_model)+(1|year_segment_model),
-  sigmadev~(1|id|model) + (1|id2|segment_model)+(1|year_segment_model),
+   mudev + U + sigmadev~ (1|id2|segment)+(1|id|year_segment),
   family = poisson(),
   nl=TRUE)
 
 
 # specify std normal non-centred priors
 mypriors_compressed <- c(
-  #prior(normal(0, 1), class = "Intercept",  dpar = "Ubin"),
-  #prior(normal(0, 1), class = "Intercept"),
-  #prior(normal(0, 1), class = "Intercept", dpar = "sigmabin"),
-  #prior(normal(0, 1), class = "Intercept", dpar = "sigmapois"),
-  #prior(normal(-10, 5), class = "Intercept", dpar = "mupois")
-  #prior(normal(0, 1), class = "Intercept", dpar = "mubin")
+  prior(normal(0, 1),  nlpar = "U"),
+  prior(normal(0, 1),  nlpar = "mudev"),
+  prior(normal(0, 1),  nlpar = "sigmadev")
   )
 ```
 
@@ -1502,17 +1497,17 @@ model_freq_compressed = brm(
   prior = mypriors_compressed,
   stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
   data = stan_data_compressed%>%
-    #filter(tprev>1,model=="N_pos_increment")%>%
+    filter(model=="N_pos_increment")%>%
     mutate(exposure = exposure*1e-7), 
   backend = "cmdstan",
   threads = threading(12),
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
-  refresh = 1,
-  iter = 200, 
+  refresh = 50,
+  iter = 500, 
   #output_samples = 1000,
-  warmup = 100,
+  warmup = 250,
   init = 0,
   chains = 1, 
   cores = 12,
@@ -1523,22 +1518,68 @@ model_freq_compressed = brm(
 ```
 
 
-this is two orders of magnitude faster than the previous model, but still has divergences.
+this is two orders of magnitude faster than the previous model, and no divergences.
+
+# simple formula Binomial only for the negative claims
+```{r}
+library(brms)
+formula_compressed_neg = bf(N_group_increment | trials(N+N_group_increment) ~ lambda ,
+   nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
+   mudev + U + sigmadev~ (1|id2|segment)+(1|id|year_segment),
+  family = binomial(),
+  nl=TRUE)
+
+
+# specify std normal non-centred priors
+mypriors_compressed_neg <- c(
+  prior(normal(0, 1),  nlpar = "U"),
+  prior(normal(0, 1),  nlpar = "mudev"),
+  prior(normal(0, 1),  nlpar = "sigmadev")
+  )
+```
+
+#run the binomial model
+```{r}
+library(brms)
+library(dplyr)
+model_freq_compressed_neg = brm(
+  formula_compressed_neg,
+  prior = mypriors_compressed_neg,
+  stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
+  data = stan_data_compressed%>%
+    filter(model=="N_neg_increment"), 
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 50,
+  iter = 500, 
+  #output_samples = 1000,
+  warmup = 250,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+```
 
 
 # check out the divergences
 ```{r}
 library(bayesplot)
 library(ggplot2)
-color_scheme_set("darkgray")
+color_scheme_set("gray")
 mcmc_parcoord(model_freq_compressed, 
               np = nuts_params(model_freq_compressed),transform = function(x) {(x - mean(x)) / sd(x)},
-              pars = vars(31:50)
+              pars = vars(1:5)
               )+theme(axis.text.x = element_text(angle = 90))
 
 
 ```
-
+the std dev of the mudev intercept can go to zero, causing divergences. try to  modify.
 
 
 # compressed frequency family definition
