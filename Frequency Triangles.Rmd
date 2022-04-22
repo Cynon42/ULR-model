@@ -1640,9 +1640,10 @@ freq_compressed <- custom_family(
 library(brms)
 formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
    nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
-   mupos + Upos + sigmapos+ Uneg~ (1|year_segment),
+   mupos + Upos + sigmapos ~ 1,
    nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
-   muneg  + sigmaneg +phineg~ 1,
+   Uneg + muneg  + sigmaneg ~ 1,
+   phineg~ 1,
   family = freq_compressed,
   nl=TRUE)
 
@@ -1654,8 +1655,8 @@ mypriors_compressed_combined <- c(
   prior(normal(0, 1),  nlpar = "sigmapos"),
   prior(normal(0, 1),  nlpar = "Uneg"),
   prior(normal(0, 1),  nlpar = "muneg"),
-  prior(normal(0, 1),  nlpar = "sigmaneg"),
-  prior(normal(0, 1),  nlpar = "phineg")
+  prior(normal(0, 1),  nlpar = "sigmaneg")
+  #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
   )
 ```
 
@@ -1677,7 +1678,6 @@ real freq_compressed_lpmf(int Nincrement,
                           real tprev,
                           real exposure
                           ){
-//beta_binomial_lpmf(Y[n] | trials[n], mu[n] * phi, (1 - mu[n]) * phi);
     return flag==0 ? beta_binomial_lpmf(Nincrement|N+Nincrement,mu * phi, (1 - mu) * phi) : poisson_log_lpmf(Nincrement|lambdapos);
 // note the use of poisson_log_lpmf as it is more accurate and we use identity link for lambdapos
 }
@@ -1685,13 +1685,13 @@ real freq_compressed_lpmf(int Nincrement,
 "
 ```
 
-#run the combined model
+#run the combined model for each segment
 this is still the approximate binomial model. To run it more accurately, the ODE version would be required.
 ```{r}
 library(brms)
 library(dplyr)
 model_list = list()
-for (i in unique(stan_data_compressed$segment)){
+for (i in unique((stan_data_compressed%>%filter(as.numeric(segment)>6))$segment)){
 model_list$i = brm(
   formula_compressed_combined,
   prior = mypriors_compressed_combined,
@@ -1720,3 +1720,36 @@ model_list$i = brm(
 ```
 
 We identified that the constraint of 99% developed by 5 years was to stringent for some lines and it was relaxed back to 20 years. Much easier to fit the tails on the data now, and much fewer divergences in the longest tailed lines.
+
+#run the combined model for all segments
+this is still the approximate binomial model. To run it more accurately, the ODE version would be required.
+```{r}
+library(brms)
+library(dplyr)
+model_triangles_compressed_combined= brm(
+  formula_compressed_combined,
+  prior = mypriors_compressed_combined,
+  stanvars = stanvar(scode = stan_functions_compressed_combined, block = "functions"),
+  data = stan_data_compressed%>%
+    filter(as.numeric(segment)<7)%>%
+    mutate(exposure = exposure*1e-7,
+           modelflag = (model=="N_pos_increment")*1),
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 0,
+  iter = 500, 
+  #output_samples = 1000,
+  warmup = 250,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+
+```
+
