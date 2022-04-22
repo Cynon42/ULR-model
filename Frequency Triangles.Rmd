@@ -1463,9 +1463,9 @@ See the sections in the data treatment code for the construction of the data we 
 ```{r}
 library(brms)
 formula_compressed = bf(N_group_increment ~ lambda + log(exposure),
-   nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
+   nlf(lambda ~ U + logdifffunction(t,tprev,log(240)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail. adding development constraint as well
    mudev + U + sigmadev~ (1|id2|segment)+(1|id|year_segment),
-  family = poisson(),
+  family = negbinomial(),
   nl=TRUE)
 
 
@@ -1486,6 +1486,23 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
 
 "
 ```
+
+#check the stancode
+confirming that the negative binomial implementation is using alternative parameters of the mean and the shape rather than alpha and beta.
+```{r}
+library(brms)
+library(dplyr)
+model_freq_compressed_stancode = make_stancode(
+  formula_compressed,
+  prior = mypriors_compressed,
+  stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
+  data = stan_data_compressed%>%
+    filter(model=="N_pos_increment")%>%
+    mutate(exposure = exposure*1e-7)
+  )
+
+```
+
 
 # brms call for compressed model
 
@@ -1591,7 +1608,7 @@ the data is now stacked such that one column contains incremental changes in eit
 library(brms)
 freq_compressed <- custom_family(
                     "freq_compressed", dpars = c("mu","lambdaneg"), # actually mu is really the lambdapos for the poisson 
-                    links = c("identity","log"),
+                    links = c("identity","logit"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
                              "vint2[n]", # N
@@ -1607,10 +1624,10 @@ freq_compressed <- custom_family(
 ```{r}
 library(brms)
 formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
-   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(60)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=60
-   mupos + Upos + sigmapos~ (1|id2|segment)+(1|id|year_segment),
-   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(60)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial
-   muneg + Uneg + sigmaneg~ (1|id2|segment)+(1|id|year_segment),
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
+   mupos + Upos + sigmapos+ Uneg~ (1|year_segment),
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
+   muneg  + sigmaneg~ 1,
   family = freq_compressed,
   nl=TRUE)
 
@@ -1656,11 +1673,14 @@ this is still the approximate binomial model. To run it more accurately, the ODE
 ```{r}
 library(brms)
 library(dplyr)
-model_freq_compressed_combined = brm(
+model_list = list()
+for (i in unique(stan_data_compressed$segment)){
+model_list$i = brm(
   formula_compressed_combined,
   prior = mypriors_compressed_combined,
   stanvars = stanvar(scode = stan_functions_compressed_combined, block = "functions"),
   data = stan_data_compressed%>%
+    filter(segment==i)%>%
     mutate(exposure = exposure*1e-7,
            modelflag = (model=="N_pos_increment")*1),
   backend = "cmdstan",
@@ -1668,7 +1688,7 @@ model_freq_compressed_combined = brm(
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
-  refresh = 50,
+  refresh = 0,
   iter = 500, 
   #output_samples = 1000,
   warmup = 250,
@@ -1679,5 +1699,7 @@ model_freq_compressed_combined = brm(
   #algorithm = "fullrank" # this uses variational inference rather than mcmc
   #file = "frequencyCMDStan3.rds"
   )
+}
 ```
 
+We identified that the constraint of 99% developed by 5 years was to stringent for some lines and it was relaxed back to 20 years. Much easier to fit the tails on the data now, and much fewer divergences in the longest tailed lines.
