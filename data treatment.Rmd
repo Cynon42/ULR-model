@@ -117,17 +117,17 @@ data_steps_monthly = nld.clm %>%
   mutate(claim_increment = above5-above5_prior)%>%
   mutate(positive_claim_increment = (claim_increment==1)*1,
          negative_claim_increment = (claim_increment==-1)*1)
-  
-triangle_monthly = data_steps_monthly %>%filter(DevMth>0)%>%
-  group_by(Country,ReservingClass,SelYOA,DevMth)%>%
-  summarise(N_pos = sum(positive_claim_increment),N_neg = sum(negative_claim_increment),N=sum(claim_increment))%>%
-  group_by(SelYOA,ReservingClass,Country)%>%arrange(ReservingClass,Country,SelYOA,DevMth)%>%
-  mutate(N_pos_cum = cumsum(N_pos),N_neg_cum = cumsum(N_neg),N_cum=cumsum(N))
 
-triangle_monthly = triangle_monthly %>% 
-  group_by(Country,ReservingClass,SelYOA)%>%
-  arrange(Country,ReservingClass,SelYOA,DevMth)%>%rename(YOA=SelYOA)%>%
-  mutate(DevMth_prior = lag(DevMth,lag=1, default = 0.1))
+triangle_monthly = data_steps_monthly %>%
+  mutate(DevMth = (DevMth < 1)*1+(DevMth > 0)*DevMth)%>%
+  group_by(Country,ReservingClass,SelYOA,DevMth)%>%
+  summarise(N_pos = sum(positive_claim_increment),
+            N_neg = sum(negative_claim_increment),
+            N=sum(positive_claim_increment)-sum(negative_claim_increment))%>%
+  group_by(SelYOA,ReservingClass,Country)%>%arrange(ReservingClass,Country,SelYOA,DevMth)%>%
+  mutate(N_pos_cum = cumsum(N_pos)
+         ,N_neg_cum = cumsum(N_neg),N_cum=cumsum(N)
+         ,DevMth_prior = lag(DevMth,lag=1, default = 0.1))%>%rename(YOA=SelYOA)
 
 # get exposure data 
 exposure_table = eur.dat.cul.mth%>%select(-(7:23))%>%  
@@ -141,6 +141,7 @@ exposure_table = eur.dat.cul.mth%>%select(-(7:23))%>%
   summarise(NetPrem = sum(NetPrem))
 
 triangle_inc_exposure_monthly = triangle_monthly %>% merge(exposure_table)
+# #rows in triangle_inc_exposure_monthly==triangle_monthly so no duplication
 
 stan_data_multisegment_monthly = triangle_inc_exposure_monthly%>%ungroup()%>%
   mutate(year = YOA-min(YOA)+1,
@@ -212,9 +213,9 @@ stan_data_multisegment_monthly_mu_sigma = stan_data_multisegment_monthly %>% mer
             N_neg_increment= sum(N_neg_increment),
          N_pos_increment = sum(N_pos_increment),
          N_increment= sum(N_increment),
-         N = max(N),
-         Nprev= min(Nprev),
-         N_pos_cum=max(N_pos_cum),
+         N = last(N),
+         Nprev= first(Nprev),
+         N_pos_cum=last(N_pos_cum)
             )
 
 stan_data_multisegment_monthly_mu_sigma_pos = stan_data_multisegment_monthly %>% merge(stan_data_mu_sigma)%>%
@@ -233,9 +234,9 @@ stan_data_multisegment_monthly_mu_sigma_pos = stan_data_multisegment_monthly %>%
             tprev=min(tprev),
             N_group_increment= sum(N_pos_increment),
          N_increment= sum(N_increment),
-         N = max(N),
-         Nprev= min(Nprev),
-         N_pos_cum=max(N_pos_cum)
+         N = last(N),
+         Nprev= first(Nprev),
+         N_pos_cum=last(N_pos_cum)
             )%>%rename(percentile_group=percentile_group_pos)%>%mutate(model = "N_pos_increment")
 
 stan_data_multisegment_monthly_mu_sigma_neg = stan_data_multisegment_monthly %>% merge(stan_data_mu_sigma)%>%
@@ -254,9 +255,9 @@ stan_data_multisegment_monthly_mu_sigma_neg = stan_data_multisegment_monthly %>%
             tprev=min(tprev),
             N_group_increment= sum(N_neg_increment),
          N_increment= sum(N_increment),
-         N = max(N),
-         Nprev= min(Nprev),
-         N_pos_cum=max(N_pos_cum)
+         N = last(N),
+         Nprev= first(Nprev),
+         N_pos_cum=last(N_pos_cum)
             )%>%rename(percentile_group=percentile_group_neg)%>%mutate(model = "N_neg_increment")
 
 

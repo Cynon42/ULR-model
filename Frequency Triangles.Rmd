@@ -1640,7 +1640,8 @@ freq_compressed <- custom_family(
 library(brms)
 formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
    nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
-   mupos + Upos + sigmapos ~ 1,
+   Upos ~ poly(year,3)+(1|year),
+   mupos  + sigmapos ~ 1,
    nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
    Uneg + muneg  + sigmaneg ~ 1,
    phineg~ 1,
@@ -1650,7 +1651,7 @@ formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vre
 
 # specify std normal non-centred priors
 mypriors_compressed_combined <- c(
-  prior(normal(0, 1),  nlpar = "Upos"),
+  #prior(normal(0, 1),  nlpar = "Upos"),
   prior(normal(0, 1),  nlpar = "mupos"),
   prior(normal(0, 1),  nlpar = "sigmapos"),
   prior(normal(0, 1),  nlpar = "Uneg"),
@@ -1685,7 +1686,7 @@ real freq_compressed_lpmf(int Nincrement,
 "
 ```
 
-#run the combined model for each segment
+#run the combined model for each segment separately
 this is still the approximate binomial model. To run it more accurately, the ODE version would be required.
 ```{r}
 library(brms)
@@ -1719,16 +1720,48 @@ model_list$i = brm(
 }
 ```
 
-We identified that the constraint of 99% developed by 5 years was to stringent for some lines and it was relaxed back to 20 years. Much easier to fit the tails on the data now, and much fewer divergences in the longest tailed lines.
+We identified that the constraint of 99% developed by 5 years was to stringent for some lines and it was relaxed back to 20 years. Much easier to fit the tails on the data now, and much fewer divergences in the longest tailed lines. We also found that relaxing this condition did not reduce the number of divergent transitions. Neither did conversion of the binomial model to beta binomial.
+
+We currently assume that the poisson model for positive claim count is stable, but we have introduced an overdispersed poisson to check on whether this improves performance. Overdispersed poisson is performed by a Negative Binomial model. So we have upgraded the statistical approach to a 2 parameter model for positive and negative claim counts to separately control variance just in case overdispersion is required. It is easily reduced back if this becomes possible.
+
+We have reduced back the complexity of the model
 
 #run the combined model for all segments
 this is still the approximate binomial model. To run it more accurately, the ODE version would be required.
+
+first define the formula for all segments
+```{r}
+library(brms)
+formula_compressed_combined_allseg = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
+   Upos ~ T2(year,by=segment)+(1|year_segment),
+   mupos  + sigmapos ~ 1,
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
+   Uneg + muneg  + sigmaneg ~ 1,
+   phineg~ 1,
+  family = freq_compressed,
+  nl=TRUE)
+
+
+# specify std normal non-centred priors
+mypriors_compressed_combined_allseg <- c(
+  prior(normal(0, 1),  nlpar = "Upos"),
+  prior(normal(0, 1),  nlpar = "mupos"),
+  prior(normal(0, 1),  nlpar = "sigmapos"),
+  prior(normal(0, 1),  nlpar = "Uneg"),
+  prior(normal(0, 1),  nlpar = "muneg"),
+  prior(normal(0, 1),  nlpar = "sigmaneg")
+  #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
+  )
+```
+
+then run brms for all segments at once
 ```{r}
 library(brms)
 library(dplyr)
-model_triangles_compressed_combined= brm(
-  formula_compressed_combined,
-  prior = mypriors_compressed_combined,
+model_triangles_compressed_combined_allseg= brm(
+  formula_compressed_combined_allseg,
+  prior = mypriors_compressed_combined_allseg,
   stanvars = stanvar(scode = stan_functions_compressed_combined, block = "functions"),
   data = stan_data_compressed%>%
     filter(as.numeric(segment)<7)%>%
