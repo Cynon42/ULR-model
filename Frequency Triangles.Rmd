@@ -1537,13 +1537,13 @@ model_freq_compressed = brm(
 
 this is two orders of magnitude faster than the previous model, and no divergences.
 
-# simple formula Binomial only for the negative claims
+# simple formula Beta Binomial only for the negative claims
 ```{r}
 library(brms)
 formula_compressed_neg = bf(N_group_increment | trials(N+N_group_increment) ~ lambda ,
-   nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
+   nlf(lambda ~ U + logdifffunction(t,tprev,log(240)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
    mudev + U + sigmadev~ (1|id2|segment)+(1|id|year_segment),
-  family = brmsfamily(beta_binomial)
+  family = beta_binomial,
   nl=TRUE)
 
 
@@ -1622,8 +1622,8 @@ the data is now stacked such that one column contains incremental changes in eit
 
 library(brms)
 freq_compressed <- custom_family(
-                    "freq_compressed", dpars = c("mu","lambdaneg"), # actually mu is really the lambdapos for the poisson 
-                    links = c("identity","logit"),
+                    "freq_compressed", dpars = c("mu","lambdaneg","phineg"), # actually mu is really the lambdapos for the poisson 
+                    links = c("identity","logit","log"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # Nprev
                              "vint2[n]", # N
@@ -1642,7 +1642,7 @@ formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vre
    nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
    mupos + Upos + sigmapos+ Uneg~ (1|year_segment),
    nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
-   muneg  + sigmaneg~ 1,
+   muneg  + sigmaneg +phineg~ 1,
   family = freq_compressed,
   nl=TRUE)
 
@@ -1654,7 +1654,8 @@ mypriors_compressed_combined <- c(
   prior(normal(0, 1),  nlpar = "sigmapos"),
   prior(normal(0, 1),  nlpar = "Uneg"),
   prior(normal(0, 1),  nlpar = "muneg"),
-  prior(normal(0, 1),  nlpar = "sigmaneg")
+  prior(normal(0, 1),  nlpar = "sigmaneg"),
+  prior(normal(0, 1),  nlpar = "phineg")
   )
 ```
 
@@ -1667,7 +1668,8 @@ real logdifffunction(real t,real tprev,real mu,real sigma){
 
 real freq_compressed_lpmf(int Nincrement,
                           real lambdapos,
-                          real lambdaneg,
+                          real mu,
+                          real phi,
                           int Nprev,
                           int N,
                           int flag,
@@ -1675,8 +1677,8 @@ real freq_compressed_lpmf(int Nincrement,
                           real tprev,
                           real exposure
                           ){
-
-    return flag==0 ? binomial_lpmf(Nincrement|N+Nincrement,lambdaneg) : poisson_log_lpmf(Nincrement|lambdapos);
+//beta_binomial_lpmf(Y[n] | trials[n], mu[n] * phi, (1 - mu[n]) * phi);
+    return flag==0 ? beta_binomial_lpmf(Nincrement|N+Nincrement,mu * phi, (1 - mu) * phi) : poisson_log_lpmf(Nincrement|lambdapos);
 // note the use of poisson_log_lpmf as it is more accurate and we use identity link for lambdapos
 }
 
