@@ -1543,7 +1543,7 @@ library(brms)
 formula_compressed_neg = bf(N_group_increment | trials(N+N_group_increment) ~ lambda ,
    nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail
    mudev + U + sigmadev~ (1|id2|segment)+(1|id|year_segment),
-  family = binomial(),
+  family = brmsfamily(beta_binomial)
   nl=TRUE)
 
 
@@ -1553,6 +1553,21 @@ mypriors_compressed_neg <- c(
   prior(normal(0, 1),  nlpar = "mudev"),
   prior(normal(0, 1),  nlpar = "sigmadev")
   )
+```
+
+#check the stancode
+confirming that the negative binomial implementation is using alternative parameters of the mean and the shape rather than alpha and beta.
+```{r}
+library(brms)
+library(dplyr)
+model_freq_compressed_stancode_neg = make_stancode(
+  formula_compressed_neg,
+  prior = mypriors_compressed_neg,
+  stanvars = stanvar(scode = stan_functions_compressed, block = "functions"),
+  data = stan_data_compressed%>%
+    filter(model=="N_neg_increment")
+  )
+
 ```
 
 #run the binomial model
@@ -1620,7 +1635,7 @@ freq_compressed <- custom_family(
               )
 ```
 
-# Combined formula for Poisson Binomial
+# Combined formula for Poisson Binomial in the case of a single segment
 ```{r}
 library(brms)
 formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
