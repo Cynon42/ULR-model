@@ -1639,10 +1639,10 @@ freq_compressed <- custom_family(
 ```{r}
 library(brms)
 formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
-   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
-   Upos ~ poly(year,3)+(1|year),
-   mupos  + sigmapos ~ 1,
-   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(60)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
+   Upos ~ t2(year)+(1|year),
+   mupos  + sigmapos ~ poly(year,2),
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(60)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
    Uneg + muneg  + sigmaneg ~ 1,
    phineg~ 1,
   family = freq_compressed,
@@ -1652,10 +1652,10 @@ formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vre
 # specify std normal non-centred priors
 mypriors_compressed_combined <- c(
   #prior(normal(0, 1),  nlpar = "Upos"),
-  prior(normal(0, 1),  nlpar = "mupos"),
+  prior(normal(2, 1),  nlpar = "mupos"),
   prior(normal(0, 1),  nlpar = "sigmapos"),
   prior(normal(0, 1),  nlpar = "Uneg"),
-  prior(normal(0, 1),  nlpar = "muneg"),
+  prior(normal(3, 1),  nlpar = "muneg"),
   prior(normal(0, 1),  nlpar = "sigmaneg")
   #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
   )
@@ -1706,7 +1706,7 @@ model_list$i = brm(
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
-  refresh = 0,
+  refresh = 50,
   iter = 500, 
   #output_samples = 1000,
   warmup = 250,
@@ -1733,19 +1733,19 @@ first define the formula for all segments
 ```{r}
 library(brms)
 formula_compressed_combined_allseg = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
-   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(240)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
-   Upos ~ T2(year,by=segment)+(1|year_segment),
-   mupos  + sigmapos ~ 1,
-   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(240)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
-   Uneg + muneg  + sigmaneg ~ 1,
-   phineg~ 1,
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(60)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
+   Upos ~ t2(year, by = segment)+(1|year_segment)+(1|segment),
+   mupos  + sigmapos ~ (poly(year,2)|segment),
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(60)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
+   Uneg + muneg  + sigmaneg ~ (1|segment),
+   phineg~ (1|segment),
   family = freq_compressed,
   nl=TRUE)
 
 
 # specify std normal non-centred priors
 mypriors_compressed_combined_allseg <- c(
-  prior(normal(0, 1),  nlpar = "Upos"),
+  #prior(normal(0, 1),  nlpar = "Upos"),
   prior(normal(0, 1),  nlpar = "mupos"),
   prior(normal(0, 1),  nlpar = "sigmapos"),
   prior(normal(0, 1),  nlpar = "Uneg"),
@@ -1764,7 +1764,7 @@ model_triangles_compressed_combined_allseg= brm(
   prior = mypriors_compressed_combined_allseg,
   stanvars = stanvar(scode = stan_functions_compressed_combined, block = "functions"),
   data = stan_data_compressed%>%
-    filter(as.numeric(segment)<7)%>%
+    #filter(as.numeric(segment)<7)%>%
     mutate(exposure = exposure*1e-7,
            modelflag = (model=="N_pos_increment")*1),
   backend = "cmdstan",
@@ -1772,7 +1772,7 @@ model_triangles_compressed_combined_allseg= brm(
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
-  refresh = 0,
+  refresh = 10,
   iter = 500, 
   #output_samples = 1000,
   warmup = 250,
@@ -1785,4 +1785,4 @@ model_triangles_compressed_combined_allseg= brm(
   )
 
 ```
-
+So, after a bug correction in the data and walking back the complexity. We arrive at a model that is now working without divergences.
