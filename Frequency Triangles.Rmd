@@ -1463,7 +1463,7 @@ See the sections in the data treatment code for the construction of the data we 
 ```{r}
 library(brms)
 formula_compressed = bf(N_group_increment ~ lambda + log(exposure),
-   nlf(lambda ~ U + logdifffunction(t,tprev,log(240)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail. adding development constraint as well
+   nlf(lambda ~ U + logdifffunction(t,tprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)) ) ,# std incremental poisson model for N+ or N- using modified version of lccdf for syntax and numerical accuracy in the tail. adding development constraint as well
    mudev + U + sigmadev~ (1|id2|segment)+(1|id|year_segment),
   family = negbinomial(),
   nl=TRUE)
@@ -1642,7 +1642,7 @@ formula_compressed_combined = bf(N_group_increment | vint(Nprev,N,modelflag)+vre
    nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(60)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
    Upos ~ t2(year)+(1|year),
    mupos  + sigmapos ~ poly(year,2),
-   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(60)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(100)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
    Uneg + muneg  + sigmaneg ~ 1,
    phineg~ 1,
   family = freq_compressed,
@@ -1736,7 +1736,7 @@ formula_compressed_combined_allseg = bf(N_group_increment | vint(Nprev,N,modelfl
    nlf(lambdapos ~ Upos + logdifffunction(t,tprev,log(60)-2.3*exp(sigmapos)-exp(mupos),exp(sigmapos)) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. Constrained mu for >99% development at t=120
    Upos ~ t2(year, by = segment)+(1|year_segment)+(1|segment),
    mupos  + sigmapos ~ (poly(year,2)|segment),
-   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(60)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
+   nlf(lambdaneg ~ Uneg + logdifffunction(t,tprev,log(80)-2.3*exp(sigmaneg)-exp(muneg),exp(sigmaneg)) ) ,# same model for N- but binomial with additional delay on reports permitted=-==
    Uneg + muneg  + sigmaneg ~ (1|segment),
    phineg~ (1|segment),
   family = freq_compressed,
@@ -1746,10 +1746,10 @@ formula_compressed_combined_allseg = bf(N_group_increment | vint(Nprev,N,modelfl
 # specify std normal non-centred priors
 mypriors_compressed_combined_allseg <- c(
   #prior(normal(0, 1),  nlpar = "Upos"),
-  prior(normal(0, 1),  nlpar = "mupos"),
+  prior(normal(2, 1),  nlpar = "mupos"),
   prior(normal(0, 1),  nlpar = "sigmapos"),
   prior(normal(0, 1),  nlpar = "Uneg"),
-  prior(normal(0, 1),  nlpar = "muneg"),
+  prior(normal(3, 1),  nlpar = "muneg"),
   prior(normal(0, 1),  nlpar = "sigmaneg")
   #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
   )
@@ -1772,7 +1772,7 @@ model_triangles_compressed_combined_allseg= brm(
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
-  refresh = 10,
+  refresh = 1,
   iter = 500, 
   #output_samples = 1000,
   warmup = 250,
@@ -1786,3 +1786,6 @@ model_triangles_compressed_combined_allseg= brm(
 
 ```
 So, after a bug correction in the data and walking back the complexity. We arrive at a model that is now working without divergences.
+
+# validation visualisations
+
