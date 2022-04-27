@@ -1729,7 +1729,7 @@ We have reduced back the complexity of the model
 #run the combined model for all segments
 this is still the approximate binomial model. To run it more accurately, the ODE version would be required.
 
-first define the formula for all segments
+#define the formula for all segments
 ```{r}
 library(brms)
 formula_compressed_combined_allseg = bf(N_group_increment | vint(Nprev,N,modelflag)+vreal(t,tprev,exposure) ~ lambdapos + log(exposure),
@@ -1755,7 +1755,7 @@ mypriors_compressed_combined_allseg <- c(
   )
 ```
 
-then run brms for all segments at once
+#run brms for all segments at once
 ```{r}
 library(brms)
 library(dplyr)
@@ -1785,7 +1785,6 @@ model_triangles_compressed_combined_allseg= brm(
   )
 
 ```
-So, after a bug correction in the data and walking back the complexity. We arrive at a model that is now working without divergences.
 
 # validation visualisations
 
@@ -1793,4 +1792,105 @@ Check result with shinystan
 ```{r}
  launch_shinystan(model_triangles_compressed_combined_allseg)
 ```
-do some overlay plots
+
+So, after a bug correction in the data and walking back the complexity. We arrive at a model that is now working without divergences.
+On examination of the model in finer detail now, there are a couple of further adjustments we should make:
+- Beta Binomial may be un-necessary
+- the development of N- could use a time measure that was invariant to N+ development, e.g. t for N- could be replaced by the z-score at that time for N+. This would suggest the N- development is happening at a specific % developed and now highly correlated to mupos and sigmapos.
+- add a covariance structure acknowledging that the parameters are highly correlated
+
+# family definition
+```{r}
+
+library(brms)
+freq_def <- custom_family(
+                    "freq_def", dpars = c("mu","lambdaneg"), # actually mu is really the lambdapos for the poisson 
+                    links = c("identity","logit"),
+                    type = "int",# lpmf vs lpdf
+                    vars = c("vint1[n]", # N
+                             "vint2[n]" # model flag where 1 = N_pos_increment
+                             ) 
+              )
+```
+
+# functions adjusted
+```{r}
+stan_functions_def = "
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  return log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+}
+
+real freq_def_lpmf(int Nincrement,
+                          real loglambdapos,
+                          real lambdaneg,
+                          int N,
+                          int flag
+                          ){
+    return flag==0 ? binomial_lpmf(Nincrement|N+Nincrement,lambdaneg ) : poisson_log_lpmf(Nincrement|loglambdapos);
+// note the use of poisson_log_lpmf as it is more accurate and we use identity link for loglambdapos
+}
+
+"
+```
+
+# A formula for all segments
+combining all the suggested improvements
+```{r}
+library(brms)
+formula_def = bf(N_group_increment | vint(N,modelflag) ~ lambdapos + log(exposure),
+   nlf(sigmap~exp(sigmapos+1)),
+   nlf(mup~log(60)-2.3*sigmap-exp(mupos+1)),# Constrained mu for >99% development at t=60
+   nlf(lambdapos ~ Upos + logdifffunction(t,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. 
+   Upos ~ t2(year, by = segment)+(1|year_segment)+(1|id|segment),
+   mupos  + sigmapos ~ (poly(year,2)|id|segment),
+   nlf(tz~ exp((log(t)-mup)/sigmap)),
+   nlf(tprevz~ exp((log(tprev)-mup)/sigmap)),
+   nlf(sigman~exp(sigmaneg+1)),
+   nlf(mun~5-2.3*sigman-exp(muneg+1)),# Constrained mu for >99% development at z=5
+   nlf(lambdaneg ~ Uneg + logdifffunction(tz,tprevz,mun,sigman) ) ,# same model for N- but binomial with additional delay on reports permitted
+   Uneg + muneg  + sigmaneg ~ (1|id|segment),
+  family = freq_def,
+  nl=TRUE)
+
+
+# specify std normal non-centred priors
+mypriors_def <- c(
+  prior(normal(5, 2),  nlpar = "Upos"),
+  prior(normal(2, 1),  nlpar = "mupos"),
+  prior(normal(0, 1),  nlpar = "sigmapos"),
+  prior(normal(0, 1),  nlpar = "Uneg"),
+  prior(normal(3, 1),  nlpar = "muneg"),
+  prior(normal(0, 1),  nlpar = "sigmaneg")
+  #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
+  )
+```
+
+#run brms for the new model
+```{r}
+library(brms)
+library(dplyr)
+model_def= brm(
+  formula_def,
+  prior = mypriors_def,
+  stanvars = stanvar(scode = stan_functions_def, block = "functions"),
+  data = stan_data_compressed%>%
+    mutate(exposure = exposure*1e-7,
+           modelflag = (model=="N_pos_increment")*1),
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=20,
+  #seed = 1235,
+  refresh = 100,
+  iter = 500, 
+  #output_samples = 1000,
+  warmup = 250,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+
+```
