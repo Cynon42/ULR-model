@@ -1840,13 +1840,13 @@ library(brms)
 formula_def = bf(N_group_increment | vint(N,modelflag) ~ lambdapos + log(exposure),
    nlf(sigmap~exp(sigmapos+1)),
    nlf(mup~log(60)-2.3*sigmap-exp(mupos+1)),# Constrained mu for >99% development at t=60
-   nlf(lambdapos ~ Upos + logdifffunction(t,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. 
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. 
    Upos ~ t2(year, by = segment)+(1|year_segment)+(1|id|segment),
    mupos  + sigmapos ~ (poly(year,2)|id|segment),
    nlf(tz~ exp((log(t)-mup)/sigmap)),
    nlf(tprevz~ exp((log(tprev)-mup)/sigmap)),
    nlf(sigman~exp(sigmaneg+1)),
-   nlf(mun~5-2.3*sigman-exp(muneg+1)),# Constrained mu for >99% development at z=5
+   nlf(mun~10-2.3*sigman-exp(muneg+1)),# Constrained mu for >99% development at z=5
    nlf(lambdaneg ~ Uneg + logdifffunction(tz,tprevz,mun,sigman) ) ,# same model for N- but binomial with additional delay on reports permitted
    Uneg + muneg  + sigmaneg ~ (1|id|segment),
   family = freq_def,
@@ -1856,11 +1856,11 @@ formula_def = bf(N_group_increment | vint(N,modelflag) ~ lambdapos + log(exposur
 # specify std normal non-centred priors
 mypriors_def <- c(
   prior(normal(5, 2),  nlpar = "Upos"),
-  prior(normal(2, 1),  nlpar = "mupos"),
-  prior(normal(0, 1),  nlpar = "sigmapos"),
-  prior(normal(0, 1),  nlpar = "Uneg"),
+  prior(normal(0, 2),  nlpar = "mupos"),
+  prior(normal(-1, 1),  nlpar = "sigmapos"),
+  prior(normal(-1, 1),  nlpar = "Uneg"),
   prior(normal(3, 1),  nlpar = "muneg"),
-  prior(normal(0, 1),  nlpar = "sigmaneg")
+  prior(normal(-1, 1),  nlpar = "sigmaneg")
   #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
   )
 ```
@@ -1869,7 +1869,7 @@ mypriors_def <- c(
 ```{r}
 library(brms)
 library(dplyr)
-model_def= brm(
+model_def2= brm(
   formula_def,
   prior = mypriors_def,
   stanvars = stanvar(scode = stan_functions_def, block = "functions"),
@@ -1879,9 +1879,9 @@ model_def= brm(
   backend = "cmdstan",
   threads = threading(12),
   control = list(adapt_delta = 0.99),
-  max_treedepth=20,
+  max_treedepth=50,
   #seed = 1235,
-  refresh = 100,
+  refresh = 1,
   iter = 500, 
   #output_samples = 1000,
   warmup = 250,
