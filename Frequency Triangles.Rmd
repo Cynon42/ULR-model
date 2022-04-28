@@ -1798,6 +1798,7 @@ On examination of the model in finer detail now, there are a couple of further a
 - Beta Binomial may be un-necessary
 - the development of N- could use a time measure that was invariant to N+ development, e.g. t for N- could be replaced by the z-score at that time for N+. This would suggest the N- development is happening at a specific % developed and now highly correlated to mupos and sigmapos.
 - add a covariance structure acknowledging that the parameters are highly correlated
+- should change the structure of lambdaneg, the expected N- calculation. It should work more like the poisson where the rate curves are integrated to give the expected NUMBER of claims. This should be then divided by N(t) to give a rate. 
 
 # family definition
 ```{r}
@@ -1843,16 +1844,18 @@ combining all the suggested improvements
 library(brms)
 formula_def = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ lambdapos + log(exposure),
    nlf(sigmap~exp(sigmapos)),
-   nlf(mup~log(60)-2.3*sigmap-exp(mupos)),# Constrained mu for >99% development at t=60
-   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. 
-   Upos ~ 1,
-   mupos  + sigmapos ~ 1,
-   nlf(tz~ t),#exp((log(t)-mup)/sigmap)),
-   nlf(tprevz~ tprev),#exp((log(tprev)-mup)/sigmap)),
+   nlf(mup~log(80)-2.3*sigmap-exp(mupos)),# Constrained mu for >99% development at t=60
+   nlf(lambdapos ~ Upos + logdifffunction(t,tprev,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail.
+   nlf(tz~ exp((log(t)-mup)/sigmap)),
+   nlf(tprevz~ exp((log(tprev)-mup)/sigmap)),
    nlf(sigman~exp(sigmaneg)),
-   nlf(mun~ mup +(log(80)-2.3*sigman-mup)*inv_logit(muneg-3)),# Constrained mu for >99% development at z-score=5
-   nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) - exp(Uneg) - logdifffunction(t,0.01,mup,sigmap)) ), # this function will be positive and never greater than 1
-   Uneg + muneg  + sigmaneg ~ 1,
+   #nlf(mun~ mup +(log(80)-2.3*sigman-mup)*inv_logit(muneg-3)),# Constrained mu for >99% development at z-score=5
+   nlf(mun~log(80)-2.3*sigman-exp(muneg-3)),# Constrained mu for >99% development at t=80
+   nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) - exp(Uneg) - logdifffunction(t,0.01,mup,sigmap)) ), # this function will be positive and never greater than 1. derived by suggesting that the N_pos_increment is a poisson rate curve, then divided by N.
+   Upos ~ (poly(year,2)|id| segment) + (1|id2|year_segment),
+   mupos  + sigmapos ~ (1|id| segment) ,
+   Uneg ~ (poly(year,2)|id| segment) + (1|id2|year_segment), 
+    muneg  + sigmaneg ~(1|id| segment) ,
   family = freq_def,
   nl=TRUE)
 
@@ -1861,10 +1864,10 @@ formula_def = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ l
 mypriors_def <- c(
   prior(normal(5, 2),  nlpar = "Upos"),
   prior(normal(-1, 5),  nlpar = "mupos"),
-  prior(normal(0, 1),  nlpar = "sigmapos"),
-  prior(normal(0, 1),  nlpar = "Uneg"),
-  prior(normal(0, 1),  nlpar = "muneg"),
-  prior(normal(0, 1),  nlpar = "sigmaneg")
+  prior(normal(0, 2),  nlpar = "sigmapos"),
+  prior(normal(0, 2),  nlpar = "Uneg"),
+  prior(normal(3, 2),  nlpar = "muneg"),
+  prior(normal(0, 2),  nlpar = "sigmaneg")
   #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
   )
 ```
@@ -1878,7 +1881,7 @@ model_def= brm(
   prior = mypriors_def,
   stanvars = stanvar(scode = stan_functions_def, block = "functions"),
   data = stan_data_compressed%>%
-    filter(as.numeric(segment)==1)%>%
+    #filter(as.numeric(segment)==1)%>%
     mutate(exposure = exposure*1e-7,
            modelflag = (model=="N_pos_increment")*1),
   backend = "cmdstan",
@@ -1959,7 +1962,7 @@ posterior_predict_freq_def <- function(i, prep, ...) {
     modelflag*pos+(1-modelflag)*neg
 }
 
-selectedsegment=1
+selectedsegment=2
 
 pred_increments <- predicted_draws(model_def, 
                          newdata = stan_data_compressed%>%
@@ -1979,16 +1982,6 @@ library(plotly)
 library(ggplot2)
 library(patchwork)# allows for the side by side charting process that you see below
 
-# check method works
-
-pred_increments%>%
-                filter(year ==8)%>%
-                group_by(segment,year,.draw)%>%
-                arrange(tprev)%>%
-                mutate(N_predicted = cumsum(.prediction))%>%
-                filter(.draw==1)%>%
-                View()
-
 
 N_plot = list()
 Npos_plot = list()
@@ -2002,28 +1995,28 @@ for (i in unique(pred_increments$year)){
                 group_by(segment,year,.draw)%>%
                 arrange(tprev)%>%
                 mutate(N_predicted = cumsum(.prediction*(modelflag*2-1)))%>%
-                ggplot(aes(x = t, y = N_predicted)) +
+                ggplot(aes(x = tprev, y = N_predicted)) +
                 stat_lineribbon() +
                 scale_fill_brewer() +
-                geom_point(data = pred_increments%>%filter(year ==(i)), aes(t, N))
+                geom_point(data = pred_increments%>%filter(year ==(i)), aes(tprev, N))
   Npos_plot[[k]] = pred_increments%>%
                 filter(year ==i,modelflag==1)%>%
                 group_by(segment,year,.draw)%>%
                 arrange(tprev)%>%
                 mutate(N_predicted = cumsum(.prediction))%>%
-                ggplot(aes(x = t, y = N_predicted)) +
+                ggplot(aes(x = tprev, y = N_predicted)) +
                 stat_lineribbon() +
                 scale_fill_brewer() +
-                geom_point(data = pred_increments%>%filter(year ==(i)), aes(t, N_pos_cum))
+                geom_point(data = pred_increments%>%filter(year ==(i)), aes(tprev, N_pos_cum))
   Nneg_plot[[k]] = pred_increments%>%
                 filter(year ==i,modelflag==0)%>%
                 group_by(segment,year,.draw)%>%
                 arrange(tprev)%>%
                 mutate(N_predicted = cumsum(.prediction))%>%
-                ggplot(aes(x = t, y = N_predicted)) +
+                ggplot(aes(x = tprev, y = N_predicted)) +
                 stat_lineribbon() +
                 scale_fill_brewer() +
-                geom_point(data = pred_increments%>%filter(year ==(i)), aes(t, N_pos_cum-N))
+                geom_point(data = pred_increments%>%filter(year ==(i)), aes(tprev, N_pos_cum-N))
   if (i==min(pred_increments$year)){ 
     plotN = N_plot[[k]] 
     plotNpos = Npos_plot[[k]]
