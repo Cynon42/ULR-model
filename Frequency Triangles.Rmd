@@ -1805,7 +1805,7 @@ On examination of the model in finer detail now, there are a couple of further a
 library(brms)
 freq_def <- custom_family(
                     "freq_def", dpars = c("mu","lambdaneg"), # actually mu is really the lambdapos for the poisson 
-                    links = c("identity","logit"),
+                    links = c("identity","identity"),
                     type = "int",# lpmf vs lpdf
                     vars = c("vint1[n]", # N
                              "vint2[n]", # Nprev
@@ -1842,17 +1842,17 @@ combining all the suggested improvements
 ```{r}
 library(brms)
 formula_def = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ lambdapos + log(exposure),
-   nlf(sigmap~exp(sigmapos+1)),
-   nlf(mup~log(60)-2.3*sigmap-exp(mupos+1)),# Constrained mu for >99% development at t=60
+   nlf(sigmap~exp(sigmapos)),
+   nlf(mup~log(60)-2.3*sigmap-exp(mupos)),# Constrained mu for >99% development at t=60
    nlf(lambdapos ~ Upos + logdifffunction(t,tprev,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail. 
-   Upos ~ t2(year, by = segment)+(1|year_segment)+(1|id|segment),
-   mupos  + sigmapos ~ (poly(year,2)|id|segment),
-   nlf(tz~ exp((log(t)-mup)/sigmap)),
-   nlf(tprevz~ exp((log(tprev)-mup)/sigmap)),
-   nlf(sigman~exp(sigmaneg+1)),
-   nlf(mun~5-2.3*sigman-exp(muneg+1)),# Constrained mu for >99% development at z-score=5
-   nlf(lambdaneg ~ Uneg + logdifffunction(tz,tprevz,mun,sigman) ) ,# same model for N- but binomial with additional delay on reports permitted
-   Uneg + muneg  + sigmaneg ~ (1|id|segment),
+   Upos ~ 1,
+   mupos  + sigmapos ~ 1,
+   nlf(tz~ t),#exp((log(t)-mup)/sigmap)),
+   nlf(tprevz~ tprev),#exp((log(tprev)-mup)/sigmap)),
+   nlf(sigman~exp(sigmaneg)),
+   nlf(mun~ mup +(log(80)-2.3*sigman-mup)*inv_logit(muneg-3)),# Constrained mu for >99% development at z-score=5
+   nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) - exp(Uneg) - logdifffunction(t,0.01,mup,sigmap)) ), # this function will be positive and never greater than 1
+   Uneg + muneg  + sigmaneg ~ 1,
   family = freq_def,
   nl=TRUE)
 
@@ -1860,11 +1860,11 @@ formula_def = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ l
 # specify std normal non-centred priors
 mypriors_def <- c(
   prior(normal(5, 2),  nlpar = "Upos"),
-  prior(normal(0, 2),  nlpar = "mupos"),
-  prior(normal(-1, 1),  nlpar = "sigmapos"),
-  prior(normal(-1, 1),  nlpar = "Uneg"),
-  prior(normal(3, 3),  nlpar = "muneg"),
-  prior(normal(0, 4),  nlpar = "sigmaneg")
+  prior(normal(-1, 5),  nlpar = "mupos"),
+  prior(normal(0, 1),  nlpar = "sigmapos"),
+  prior(normal(0, 1),  nlpar = "Uneg"),
+  prior(normal(0, 1),  nlpar = "muneg"),
+  prior(normal(0, 1),  nlpar = "sigmaneg")
   #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
   )
 ```
@@ -1878,6 +1878,7 @@ model_def= brm(
   prior = mypriors_def,
   stanvars = stanvar(scode = stan_functions_def, block = "functions"),
   data = stan_data_compressed%>%
+    filter(as.numeric(segment)==1)%>%
     mutate(exposure = exposure*1e-7,
            modelflag = (model=="N_pos_increment")*1),
   backend = "cmdstan",
@@ -1885,7 +1886,7 @@ model_def= brm(
   control = list(adapt_delta = 0.99),
   max_treedepth=50,
   #seed = 1235,
-  refresh = 0,
+  refresh = 1,
   iter = 500, 
   #output_samples = 1000,
   warmup = 250,
@@ -1905,6 +1906,9 @@ model_def= brm(
 
 now generate plots of the actual versus fitted for a selected year.
 
+# export functions
+generate the necessary functions in r by exporting the stan model functions
+
 ```{r}
 library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which is quite old but works for this
 library(brms)
@@ -1919,12 +1923,12 @@ modelRstan_def = brm(
   chains = 0, # runs no iterations
   )
 expose_functions(modelRstan_def, vectorize = TRUE, cacheDir = "~/ULR-model")
+```
 
-
+# generate the fitted samples
+```{r}
 library(tidybayes)
-library(plotly)
-library(ggplot2)
-library(patchwork)# allows for the side by side charting process that you see below
+
 # potential function
 #plot_data_fit_poly_res =data.frame(lnbandmean=1,t=1,ay=2014)%>%
 #  complete(lnbandmean = (1:28)*0.5,t=1:60,ay=2014:2020)%>%
@@ -1956,7 +1960,6 @@ posterior_predict_freq_def <- function(i, prep, ...) {
 }
 
 selectedsegment=1
-selectedyear =1
 
 pred_increments <- predicted_draws(model_def, 
                          newdata = stan_data_compressed%>%
@@ -1967,38 +1970,72 @@ pred_increments <- predicted_draws(model_def,
                                             #year ==selectedyear
                                           )
                          )
+```
+
+# perform the plots
+
+```{r}
+library(plotly)
+library(ggplot2)
+library(patchwork)# allows for the side by side charting process that you see below
+
+# check method works
+
+pred_increments%>%
+                filter(year ==8)%>%
+                group_by(segment,year,.draw)%>%
+                arrange(tprev)%>%
+                mutate(N_predicted = cumsum(.prediction))%>%
+                filter(.draw==1)%>%
+                View()
+
 
 N_plot = list()
-for (i in unique(as.character(pred_increments$year))){
+Npos_plot = list()
+Nneg_plot = list()
+
+
+for (i in unique(pred_increments$year)){
   k=paste0( "year_",i)
   N_plot[[k]] = pred_increments%>%
-  filter(year ==as.numeric(i))%>%
-  group_by(segment,year,.draw)%>%
-  arrange(tprev)%>%
-  mutate(N_predicted = cumsum(.prediction))%>%
-  ggplot(aes(x = t, y = N_predicted)) +
-  stat_lineribbon() +
-  scale_fill_brewer() +
- geom_point(data = pred_increments%>%filter(year ==as.numeric(i)), aes(t, N))
+                filter(year ==i)%>%
+                group_by(segment,year,.draw)%>%
+                arrange(tprev)%>%
+                mutate(N_predicted = cumsum(.prediction*(modelflag*2-1)))%>%
+                ggplot(aes(x = t, y = N_predicted)) +
+                stat_lineribbon() +
+                scale_fill_brewer() +
+                geom_point(data = pred_increments%>%filter(year ==(i)), aes(t, N))
+  Npos_plot[[k]] = pred_increments%>%
+                filter(year ==i,modelflag==1)%>%
+                group_by(segment,year,.draw)%>%
+                arrange(tprev)%>%
+                mutate(N_predicted = cumsum(.prediction))%>%
+                ggplot(aes(x = t, y = N_predicted)) +
+                stat_lineribbon() +
+                scale_fill_brewer() +
+                geom_point(data = pred_increments%>%filter(year ==(i)), aes(t, N_pos_cum))
+  Nneg_plot[[k]] = pred_increments%>%
+                filter(year ==i,modelflag==0)%>%
+                group_by(segment,year,.draw)%>%
+                arrange(tprev)%>%
+                mutate(N_predicted = cumsum(.prediction))%>%
+                ggplot(aes(x = t, y = N_predicted)) +
+                stat_lineribbon() +
+                scale_fill_brewer() +
+                geom_point(data = pred_increments%>%filter(year ==(i)), aes(t, N_pos_cum-N))
+  if (i==min(pred_increments$year)){ 
+    plotN = N_plot[[k]] 
+    plotNpos = Npos_plot[[k]]
+    plotNneg = Nneg_plot[[k]]
+  }else{ 
+      plotN = plotN + N_plot[[k]]
+      plotNpos = plotNpos + Npos_plot[[k]]
+      plotNneg = plotNneg + Nneg_plot[[k]]
+      }
 }
-N_plot$year_2+N_plot$year_3
-N_plot = pred_increments%>%
-  filter(year ==selectedyear)%>%
-  group_by(segment,year,.draw)%>%
-  arrange(tprev)%>%
-  mutate(N_predicted = cumsum(.prediction))%>%
-  ggplot(aes(x = t, y = N_predicted)) +
-  stat_lineribbon() +
-  scale_fill_brewer() +
- geom_point(data = pred_increments%>%filter(year ==selectedyear), aes(t, N))
 
-N_pos_plot = predNpos%>%filter(segment==selectedsegment,year ==selectedyear)%>%
-  group_by(.draw)%>%
-  mutate(N_pos_cum_sample = cumsum(.prediction))%>%ungroup()%>%
-   ggplot(aes(x = t, y = N_pos_cum_sample)) +
-  stat_lineribbon() +
-  scale_fill_brewer() +
- geom_point(data = stan_data_multisegment%>%filter(segment==selectedsegment,year ==selectedyear), aes(t, N_pos_cum))
-
-N_plot + N_pos_plot
+plotN
+plotNpos
+plotNneg
 ```
