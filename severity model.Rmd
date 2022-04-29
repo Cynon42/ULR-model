@@ -45,9 +45,9 @@ sev_functions = "
 
 # writing the formula for the model 
 formula_sev <- bf(ACPC_increment  ~ exp(ult)*exp(log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)),lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
-                        , nlf(sigma ~ exp(sigmastd-exp(b)*DevMth))
+                        , nlf(sigma ~ exp(sigmastd-(exp(lambda)-log(0.01)/60)*DevMth))# expon ccdf for sigma. >99% dev by t=60
                         , sigmastd ~ (1|ReservingClass)
-                        , b ~ 1
+                        , lambda ~ 1
                        ,mudev ~ (1|ReservingClass)+(1|year_segment)
                        ,sigmadev~ (1|ReservingClass)+(1|year_segment)
                        ,ult~ (1|ReservingClass)+(1|year_segment)
@@ -58,12 +58,12 @@ formula_sev <- bf(ACPC_increment  ~ exp(ult)*exp(log_diff_exp(lognormal_lcdf_mod
 # specify std normal non-centred priors
 mypriors_sev <- c(
   #prior(normal(0, 5), class = "Intercept",  dpar = "sigma"),
-  prior(normal(0, 1), nlpar = "mudev"),
+  prior(normal(0, 3), nlpar = "mudev"),
   prior(normal(0, 1), nlpar = "sigmadev"),
-  prior(normal(0, 5), nlpar = "ult"),
-  prior(normal(0, 1),  nlpar = "sigmastd"),
-  #prior(normal(0, 1),  nlpar = "a"),
-  prior(normal(0, 1),  nlpar = "b")
+  #prior(normal(0, 5), nlpar = "ult"),
+  #prior(normal(0, 1),  nlpar = "sigmastd"),
+  #prior(normal(0, 1),  nlpar = "lambda"),
+  prior(normal(0, 1),  nlpar = "lambda")
   )
 ```
 
@@ -83,11 +83,11 @@ model_sev = brm(
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
-  refresh = 1000,
-  iter = 5000, 
+  refresh = 100,
+  iter = 1000, 
   #output_samples = 1000,
-  warmup = 2000,
-  thin = 10,
+  warmup = 500,
+  thin = 1,
   init = 0,
   chains = 4, 
   cores = 12,
