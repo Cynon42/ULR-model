@@ -16,8 +16,8 @@ eur.dat.cul.mth%>%mutate(factor_net_prem = factor(NetPrem))%>%group_by(factor_ne
 # 
 ```
 
-inspection reveals an additional subclass of cyber, and that "other" seems to be doubled up in terms of the number of unique premiums.
-Conclusion: we preprocess and average in the cyber and non-unique other premiums, but summarise on reserving class.Only one country at the moment
+inspection reveals an additional subclass, and that "other" seems to be doubled up in terms of the number of unique premiums.
+Conclusion: we preprocess and average in the cyber and non-unique other premiums, but summarise on reserving class. Only one country at the moment.
 
 ```{r}
 severity_data = eur.dat.cul.mth%>%group_by(Country,ReservingClass,YOA,DevMth)%>%
@@ -96,4 +96,5 @@ model_sev = brm(
   )
 ```
 
+# some validation 
 

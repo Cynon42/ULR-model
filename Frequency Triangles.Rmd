@@ -1854,7 +1854,8 @@ formula_def = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ l
    #nlf(mun~ mup +(log(80)-2.3*sigman-mup)*inv_logit(muneg-3)),# Constrained mu for >99% development at z-score=5
    nlf(mun~log(60)-2.3*sigman-exp((exp(a)*mupos+b)*g+h-3)),# Constrained mu for >99% development at t=80
    #nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) + (Upos-exp(Uneg)))*exposure / exp(Upos + logdifffunction(t,0.01,mup,sigmap) + log(exposure)) ), # this function will be positive and never greater than 1. derived by suggesting that the N_pos_increment is a poisson rate curve, then divided by N.
-   nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) -exp(exp(e)*Uneg+f) - logdifffunction(t,0.01,mup,sigmap) ) ),
+   #nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) -exp(exp(e)*Uneg+f) - logdifffunction(t,0.01,mup,sigmap) ) ),
+   nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) -exp(exp(e)*Uneg+f) - log_diff_exp(logdifffunction(t,0.01,mup,sigmap), logdifffunction(tprevz,0.01,mun,sigman) -exp(exp(e)*Uneg+f)) )),
    #Upos ~ s(year,by = segment)+(1|id| segment) + (1|id2|year_segment),
    #mupos  + sigmapos ~ (poly(year,2)|id| segment)  ,
    #Uneg ~ (poly(year,3)|id| segment) + (1|id2|year_segment), 
