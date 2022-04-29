@@ -1854,6 +1854,350 @@ formula_def = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ l
    #nlf(mun~ mup +(log(80)-2.3*sigman-mup)*inv_logit(muneg-3)),# Constrained mu for >99% development at z-score=5
    nlf(mun~log(60)-2.3*sigman-exp((exp(a)*mupos+b)*g+h-3)),# Constrained mu for >99% development at t=80
    #nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) + (Upos-exp(Uneg)))*exposure / exp(Upos + logdifffunction(t,0.01,mup,sigmap) + log(exposure)) ), # this function will be positive and never greater than 1. derived by suggesting that the N_pos_increment is a poisson rate curve, then divided by N.
+   nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) -exp(exp(e)*Uneg+f) - logdifffunction(t,0.01,mup,sigmap) ) ),
+   #Upos ~ s(year,by = segment)+(1|id| segment) + (1|id2|year_segment),
+   #mupos  + sigmapos ~ (poly(year,2)|id| segment)  ,
+   #Uneg ~ (poly(year,3)|id| segment) + (1|id2|year_segment), 
+   # muneg  + sigmaneg ~(poly(year,2)|id| segment) ,
+   Upos ~ t2(year, by=segment)+ (1|id2|year_segment),
+   mupos ~ t2(year, by=segment)+ (1|id2|year_segment),
+   sigmapos ~ (1|id|segment) ,
+   c+d+ +a+b ~ (1|id|segment)  ,
+   Uneg ~ t2(year, by=segment)+ (1|id2|year_segment), 
+   e + f ~  (1|id|segment),
+   g+h + i+j ~ 1,
+  family = freq_def,
+  nl=TRUE)
+
+
+# specify std normal non-centred priors
+mypriors_def <- c(
+  prior(double_exponential(0, 1),  nlpar = "Upos"),
+  prior(double_exponential(0, 1),  nlpar = "mupos"),
+  prior(normal(-1, 5),  nlpar = "a"),
+  prior(normal(5, 5),  nlpar = "b"),
+  prior(normal(0, 1),  nlpar = "sigmapos"),
+  prior(normal(2, 1),  nlpar = "c"),
+  prior(normal(5, 1),  nlpar = "d"),
+  prior(double_exponential(0, 1),  nlpar = "Uneg"),
+  prior(normal(2, 1),  nlpar = "e"),
+  prior(normal(0, 2),  nlpar = "f"),
+  prior(normal(3, 2),  nlpar = "g"),
+  prior(normal(2, 2),  nlpar = "h"),
+  prior(normal(0, 2),  nlpar = "i"),
+  prior(normal(2, 2),  nlpar = "j")
+  #prior(normal(3, 2),  nlpar = "muneg"),
+  #prior(normal(0, 2),  nlpar = "sigmaneg")
+  #prior(normal(0, 1),class="Intercept",  dpar = "phineg")
+  )
+```
+
+#run brms by segment for the new model
+```{r}
+library(brms)
+library(dplyr)
+model_list = list()
+for (i in unique(stan_data_compressed$segment)){
+model_list[[paste0(i)]]= brm(
+  formula_def,
+  prior = mypriors_def,
+  stanvars = stanvar(scode = stan_functions_def, block = "functions"),
+  data = stan_data_compressed%>%
+    filter(segment==i)%>%
+    mutate(exposure = exposure*1e-7,
+           modelflag = (model=="N_pos_increment")*1),
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=50,
+  #seed = 1235,
+  refresh = 500,
+  iter = 500, 
+  #output_samples = 1000,
+  warmup = 250,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+}
+```
+
+```{r}
+library(brms)
+library(dplyr)
+#prior = get_prior(
+#  formula_def,
+#  #prior = mypriors_def,
+#  stanvars = stanvar(scode = stan_functions_def, block = "functions"),
+#  data = stan_data_compressed%>%
+#    filter(as.numeric(segment)==8)%>%
+#    mutate(exposure = exposure*1e-7,
+#           modelflag = (model=="N_pos_increment")*1),
+#  
+#  )
+
+
+model_def= brm(
+  formula_def,
+  prior = mypriors_def,
+  stanvars = stanvar(scode = stan_functions_def, block = "functions"),
+  data = stan_data_compressed%>%
+    #filter(as.numeric(segment)==1)%>%
+    mutate(exposure = exposure*1e-7,
+           modelflag = (model=="N_pos_increment")*1),
+  backend = "cmdstan",
+  threads = threading(12),
+  control = list(adapt_delta = 0.99),
+  max_treedepth=50,
+  #seed = 1235,
+  refresh = 1,
+  iter = 500, 
+  #output_samples = 1000,
+  warmup = 250,
+  init = 0,
+  chains = 1, 
+  cores = 12,
+  silent=2,
+  #algorithm = "fullrank" # this uses variational inference rather than mcmc
+  #file = "frequencyCMDStan3.rds"
+  )
+
+```
+
+
+# lets do some validation
+
+
+```{r}
+library(bayesplot)
+color_scheme_set("darkgray")
+theme(axis.text.x = element_text(angle = 90))
+mcmc_parcoord(model_def, 
+              np = nuts_params(model_def),transform = function(x) {(x - mean(x)) / sd(x)},
+              pars = vars(1:10)
+              )+theme(axis.text.x = element_text(angle = 90))
+
+
+```
+
+now generate plots of the actual versus fitted for a selected year.
+
+# export functions
+generate the necessary functions in r by exporting the stan model functions
+
+```{r}
+library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which is quite old but works for this
+library(brms)
+modelRstan_def = brm(
+  formula_def,
+  prior = mypriors_def,
+  stanvars = stanvar(scode = stan_functions_def, block = "functions"),
+  data = stan_data_compressed%>%
+    mutate(exposure = exposure*1e-7,
+           modelflag = (model=="N_pos_increment")*1), 
+  backend = "rstan",# change to rstan to make use of "expose_functions()"
+  chains = 0, # runs no iterations
+  )
+expose_functions(modelRstan_def, vectorize = TRUE, cacheDir = "~/ULR-model")
+```
+
+# generate the fitted samples
+```{r}
+library(tidybayes)
+
+# potential function
+#plot_data_fit_poly_res =data.frame(lnbandmean=1,t=1,ay=2014)%>%
+#  complete(lnbandmean = (1:28)*0.5,t=1:60,ay=2014:2020)%>%
+#  mutate(bandmean = exp(lnbandmean), ayxt = paste0(ay,"_",t), inception = ay-2014)%>%
+#  add_fitted_draws(MLP2_model_adv_poly_res,dpar=TRUE)%>%
+#  mutate(bandcdf_fit = exp(MLP2_lcdf(bandmean, mu,sigma,alpha)))%>% 
+#  mutate( half_years = (t%%6==0))%>%
+#  filter(half_years == TRUE)%>%
+#  group_by(ay,t,ayxt,bandmean,half_years,lnbandmean)%>%
+#  summarise(
+#    quantile = scales::percent(c(0.25, 0.5, 0.75)) 
+#    ,bandcdf_fit = quantile(bandcdf_fit, c(0.25, 0.5, 0.75))
+#  )%>%
+#  filter(quantile == "50%")
+
+posterior_predict_freq_def <- function(i, prep, ...) {
+  
+  loglambdapos <- brms::get_dpar(prep, "mu", i = i)# identity link
+  lambdaneg <- brms::get_dpar(prep, "lambdaneg", i = i)# logit link
+  
+  Nprev <- prep$data$vint2[i] 
+  Nposincrement <- prep$data$vint3[i]
+  modelflag <- prep$data$vint4[i]
+  #prepout <<- prep
+  pos = rpois(prep$ndraws,exp(loglambdapos))
+  neg = rbinom(prep$ndraws,Nprev+Nposincrement,lambdaneg)
+  neg[is.na(neg)]=0
+
+    modelflag*pos+(1-modelflag)*neg
+}
+
+
+```
+
+# perform the plots
+
+```{r}
+library(plotly)
+library(ggplot2)
+library(patchwork)# allows for the side by side charting process that you see below
+
+
+N_plot = list()
+Npos_plot = list()
+Nneg_plot = list()
+plotN_list = list()
+plotNpos_list = list()
+plotNneg_list = list()
+              
+for (j in unique(as.numeric(stan_data_compressed$segment))){
+selectedsegment=j
+
+pred_increments <- predicted_draws(model_def, 
+                         newdata = stan_data_compressed%>%
+                                    mutate(exposure = exposure*1e-7,
+                                          modelflag = (model=="N_pos_increment")*1
+                                          )%>%
+                                    filter(as.numeric(segment)==selectedsegment#,
+                                            #year ==selectedyear
+                                          )
+                         )
+        for (i in unique(pred_increments$year)){
+          k=paste0("segment_",j,"_year_",i)
+          N_plot[[k]] = pred_increments%>%
+                        filter(year ==i)%>%
+                        group_by(segment,year,.draw)%>%
+                        arrange(t)%>%
+                        mutate(N_predicted = cumsum(.prediction*(modelflag*2-1)))%>%
+                        ggplot(aes(x = t, y = N_predicted)) +
+                        stat_lineribbon() +
+                        scale_fill_brewer() +
+                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t, N))
+          Npos_plot[[k]] = pred_increments%>%
+                        filter(year ==i,modelflag==1)%>%
+                        group_by(segment,year,.draw)%>%
+                        arrange(t)%>%
+                        mutate(N_predicted = cumsum(.prediction))%>%
+                        ggplot(aes(x = t, y = N_predicted)) +
+                        stat_lineribbon() +
+                        scale_fill_brewer() +
+                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t,        N_pos_cum))
+          Nneg_plot[[k]] = pred_increments%>%
+                        filter(year ==i,modelflag==0)%>%
+                        group_by(segment,year,.draw)%>%
+                        arrange(t)%>%
+                        mutate(N_predicted = cumsum(.prediction))%>%
+                        ggplot(aes(x = t, y = N_predicted)) +
+                        stat_lineribbon() +
+                        scale_fill_brewer() +
+                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t,        N_pos_cum-N))
+          if (i==min(pred_increments$year)){ 
+            plotN = N_plot[[k]] 
+            plotNpos = Npos_plot[[k]]
+            plotNneg = Nneg_plot[[k]]
+          }else{ 
+              plotN = plotN + N_plot[[k]]
+              plotNpos = plotNpos + Npos_plot[[k]]
+              plotNneg = plotNneg + Nneg_plot[[k]]
+              }
+        }
+plotN_list[[paste0("segment_",j)]] = plotN
+plotNpos_list[[paste0("segment_",j)]] = plotNpos
+plotNneg_list[[paste0("segment_",j)]] = plotNneg
+
+}
+plotN_list$segment_1
+plotN_list$segment_2
+plotN_list$segment_3
+plotN_list$segment_4
+plotN_list$segment_5
+plotN_list$segment_6
+plotN_list$segment_7
+plotN_list$segment_8
+plotNpos_list$segment_1
+plotNpos_list$segment_2
+plotNpos_list$segment_3
+plotNpos_list$segment_4
+plotNpos_list$segment_5
+plotNpos_list$segment_6
+plotNpos_list$segment_7
+plotNpos_list$segment_8
+plotNneg_list$segment_1
+plotNneg_list$segment_2
+plotNneg_list$segment_3
+plotNneg_list$segment_4
+plotNneg_list$segment_5
+plotNneg_list$segment_6
+plotNneg_list$segment_7
+plotNneg_list$segment_8
+
+```
+
+Great work here. Now we have passable fits on all content. More work can be done on the priors applied while minimising the divergences. Most of the issue seems to come down to controlling the development pattern on recent years where there is limited data. Laplace priors have been used at this stage, but more can be done with Horseshoe or mixture prior such as is proposed Michael Betancourt in Sparsity Blues https://betanalpha.github.io/assets/case_studies/modeling_sparsity.html .
+
+
+# try one more time
+# family definition
+```{r}
+
+library(brms)
+freq_def <- custom_family(
+                    "freq_def", dpars = c("mu","lambdaneg"), # actually mu is really the lambdapos for the poisson 
+                    links = c("identity","identity"),
+                    type = "int",# lpmf vs lpdf
+                    vars = c("vint1[n]", # N
+                             "vint2[n]", # Nprev
+                             "vint3[n]", # N pos increment
+                             "vint4[n]" # model flag where 1 = N_pos_increment
+                             ) 
+              )
+```
+
+# functions adjusted
+```{r}
+stan_functions_def = "
+real logdifffunction(real t,real tprev,real mu,real sigma){
+  return log_diff_exp(lognormal_lccdf(tprev|mu,sigma), lognormal_lccdf(t|mu,sigma));
+}
+
+real freq_def_lpmf(int Nincrement,
+                          real loglambdapos,
+                          real lambdaneg,
+                          int N,
+                          int Nprev,
+                          int Nposincrement,
+                          int flag
+                          ){
+    return flag==0 ? binomial_lpmf(Nincrement|N+Nincrement,lambdaneg ) : poisson_log_lpmf(Nincrement|loglambdapos);
+// note the use of poisson_log_lpmf as it is more accurate and we use identity link for loglambdapos
+}
+
+"
+```
+
+# A formula for all segments
+combining all the suggested improvements
+```{r}
+library(brms)
+formula_def2 = bf(N_group_increment | vint(N,Nprev,N_pos_increment,modelflag) ~ lambdapos + log(exposure),
+   nlf(sigmap~exp(sigmapos)),
+   nlf(mup~log(60)-2.3*sigmap-exp(exp(a)*mupos+b)),# Constrained mu for >99% development at t=60
+   nlf(lambdapos ~ exp(c)*Upos+d + logdifffunction(t,tprev,mup,sigmap) ) ,# std incremental poisson model for N+ using modified version of lccdf for syntax and numerical accuracy in the tail.
+   #nlf(tz~ exp((log(t)-mup)/sigmap)),
+   #nlf(tprevz~ exp((log(tprev)-mup)/sigmap)),
+   nlf(tz~ t),
+   nlf(tprevz~ tprev),
+   nlf(sigman~exp(sigmapos*i+j)),
+   #nlf(mun~ mup +(log(80)-2.3*sigman-mup)*inv_logit(muneg-3)),# Constrained mu for >99% development at z-score=5
+   nlf(mun~log(60)-2.3*sigman-exp((exp(a)*mupos+b)*g+h-3)),# Constrained mu for >99% development at t=80
+   #nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) + (Upos-exp(Uneg)))*exposure / exp(Upos + logdifffunction(t,0.01,mup,sigmap) + log(exposure)) ), # this function will be positive and never greater than 1. derived by suggesting that the N_pos_increment is a poisson rate curve, then divided by N.
    #nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) -exp(exp(e)*Uneg+f) - logdifffunction(t,0.01,mup,sigmap) ) ),
    nlf(lambdaneg ~ exp( logdifffunction(tz,tprevz,mun,sigman) -exp(exp(e)*Uneg+f) - log_diff_exp(logdifffunction(t,0.01,mup,sigmap), logdifffunction(tprevz,0.01,mun,sigman) -exp(exp(e)*Uneg+f)) )),
    #Upos ~ s(year,by = segment)+(1|id| segment) + (1|id2|year_segment),
@@ -2140,6 +2484,3 @@ plotNneg_list$segment_7
 plotNneg_list$segment_8
 
 ```
-
-Great work here. Now we have passable fits on all content. More work can be done on the priors applied while minimising the divergences. Most of the issue seems to come down to controlling the development pattern on recent years where there is limited data. Laplace priors have been used at this stage, but more can be done with Horseshoe or mixture prior such as is proposed Michael Betancourt in Sparsity Blues https://betanalpha.github.io/assets/case_studies/modeling_sparsity.html .
-
