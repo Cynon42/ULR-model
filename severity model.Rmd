@@ -39,18 +39,25 @@ library(brms)
 sev_functions = "
   real lognormal_lcdf_mod(real a,real b,real c){
   return lognormal_lcdf(a|b,c);
+  }
+
+real lognormal_lccdf_mod(real a,real b,real c){
+  return lognormal_lccdf(a|b,c);
 }
+
 
 "
 
 # writing the formula for the model 
-formula_sev <- bf(ACPC_increment  ~ exp(ult)*exp(log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)),lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
-                        , nlf(sigma ~ exp(sigmastd-(exp(lambda)-log(0.01)/60)*DevMth))# expon ccdf for sigma. >99% dev by t=60
+formula_sev <- bf(ACPC_increment  ~ exp(ult+7+log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)),lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
+                        #, nlf(sigma ~ exp(sigmastd-(exp(lambda)-log(0.01)/60)*DevMth))# expon ccdf for sigma. >99% dev by t=60
+                        , nlf(sigma ~ exp(sigmastd-log(nzClm)+lognormal_lccdf_mod(DevMth,lambda,1)) )
                         , sigmastd ~ (1|ReservingClass)
-                        , lambda ~ 1
+                        , lambda ~ (1|ReservingClass)
                        ,mudev ~ (1|ReservingClass)+(1|year_segment)
                        ,sigmadev~ (1|ReservingClass)+(1|year_segment)
                        ,ult~ (1|ReservingClass)+(1|year_segment)
+                        ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
                        ,nl=TRUE
                        )
                                
@@ -60,10 +67,10 @@ mypriors_sev <- c(
   #prior(normal(0, 5), class = "Intercept",  dpar = "sigma"),
   prior(normal(0, 3), nlpar = "mudev"),
   prior(normal(0, 1), nlpar = "sigmadev"),
-  #prior(normal(0, 5), nlpar = "ult"),
+  prior(normal(0, 5), nlpar = "ult"),
   #prior(normal(0, 1),  nlpar = "sigmastd"),
   #prior(normal(0, 1),  nlpar = "lambda"),
-  prior(normal(0, 1),  nlpar = "lambda")
+  prior(normal(0, 5),  nlpar = "lambda")
   )
 ```
 
@@ -75,7 +82,6 @@ library(dplyr)
 model_sev = brm(
   formula_sev,
   prior = mypriors_sev,
-  family = brmsfamily("gaussian",link = "identity",link_sigma = "identity"),
   stanvars = stanvar(scode = sev_functions, block = "functions"),
   data = severity_data, 
   backend = "cmdstan",
@@ -84,12 +90,12 @@ model_sev = brm(
   max_treedepth=20,
   #seed = 1235,
   refresh = 100,
-  iter = 1000, 
+  iter = 5000, 
   #output_samples = 1000,
-  warmup = 500,
+  warmup = 2500,
   thin = 1,
   init = 0,
-  chains = 4, 
+  chains = 2, 
   cores = 12,
   silent=2,
   #algorithm = "fullrank" # this uses variational inference rather than mcmc
@@ -98,3 +104,90 @@ model_sev = brm(
 
 # some validation 
 
+# export functions
+generate the necessary functions in r by exporting the stan model functions
+
+```{r}
+library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which is quite old but works for this
+library(brms)
+modelRstan_sev = brm(
+  formula_sev,
+  family = brmsfamily("gaussian",link = "identity",link_sigma = "identity"),
+  prior = mypriors_sev,
+  stanvars = stanvar(scode = sev_functions, block = "functions"),
+  data = severity_data,
+  backend = "rstan",# change to rstan to make use of "expose_functions()"
+  chains = 0, # runs no iterations
+  )
+expose_functions(modelRstan_sev, vectorize = TRUE, cacheDir = "~/ULR-model")
+```
+
+#projections
+do some projections out to t=134 for each year in each segment
+
+
+```{r}
+
+
+plot_data_sev = severity_data %>% 
+  group_by(ReservingClass,year_segment)%>%
+  complete(DevMth=(max(DevMth)+1):134)%>% 
+  arrange(DevMth)%>%
+  mutate(DevMthprev = lag(DevMth,lag=1, default = 0.1)
+         ,YOA = first(YOA))%>%
+  add_linpred_draws(model_sev,dpar=TRUE,ndraws=100)%>%
+  group_by(ReservingClass,year_segment,.draw)%>%arrange(ReservingClass,year_segment,.draw,DevMth)%>%
+  mutate(.prediction = rnorm(n(),mu,sigma))
+  
+
+```
+
+# perform the plots for the projections
+
+```{r}
+library(plotly)
+library(ggplot2)
+library(patchwork)# allows for the side by side charting process that you see below
+
+
+ACPC_plot = list()
+plot_list = list()
+plot_seg = list()
+              
+for (j in unique(as.numeric(severity_data$ReservingClass))){
+selectedsegment=j
+
+pred_increments <- plot_data_sev%>%filter(as.numeric(ReservingClass)==selectedsegment)
+                         
+        for (i in unique(pred_increments$YOA)){
+          k=paste0("segment_",j,"_year_",i)
+          ACPC_plot[[k]] = pred_increments%>%
+                        filter(YOA ==i)%>%
+                        group_by(ReservingClass,YOA,.draw)%>%
+                        arrange(DevMth)%>%
+                        mutate(N_predicted = cumsum(.prediction))%>%
+                        ggplot(aes(x = DevMth, y = N_predicted)) +
+                        stat_lineribbon() +
+                        scale_fill_brewer() +
+                        geom_point(data = pred_increments%>%filter(YOA ==(i),.draw==1), aes(DevMth, ACPC))
+          
+          if (i==min(pred_increments$YOA)){ 
+            plot_seg = ACPC_plot[[k]] 
+          }else{ 
+              plot_seg = plot_seg + ACPC_plot[[k]]
+              }
+        }
+plot_list[[paste0("segment_",j)]] = plot_seg
+
+}
+plot_list$segment_1
+plot_list$segment_2
+plot_list$segment_3
+plot_list$segment_4
+plot_list$segment_5
+plot_list$segment_6
+plot_list$segment_7
+plot_list$segment_8
+
+
+```
