@@ -49,28 +49,33 @@ real lognormal_lccdf_mod(real a,real b,real c){
 "
 
 # writing the formula for the model 
-formula_sev <- bf(ACPC_increment  ~ exp(ult+7+log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)),lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
-                        #, nlf(sigma ~ exp(sigmastd-(exp(lambda)-log(0.01)/60)*DevMth))# expon ccdf for sigma. >99% dev by t=60
-                        , nlf(sigma ~ exp(sigmastd-log(nzClm)+lognormal_lccdf_mod(DevMth,lambda,1)) )
-                        , sigmastd ~ (1|ReservingClass)
-                        , lambda ~ (1|ReservingClass)
-                       ,mudev ~ (1|ReservingClass)+(1|year_segment)
-                       ,sigmadev~ (1|ReservingClass)+(1|year_segment)
-                       ,ult~ (1|ReservingClass)+(1|year_segment)
-                        ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
+#formula_sev <- bf(ACPC_increment  ~ exp(exp(a)*ult+b+7+log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))#,lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
+#                        #, nlf(sigma ~ exp(sigmastd-(exp(lambda)-log(0.01)/60)*DevMth))# expon ccdf for sigma. >99% dev by t=60
+#                        #, nlf(sigma ~ #exp(sigmastd-log(nzClm)+lognormal_lccdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)+exp(lambda))) )
+#                        , nlf(sigma ~ exp(sigmastd-log(nzClm)+lognormal_lccdf_mod(DevMth,2,1)) )
+#                        , sigmastd ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
+#                        #, lambda ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
+#                       ,mudev ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
+#                       ,sigmadev~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
+#                       ,ult~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
+#                       ,a+b ~ (1|id|ReservingClass)
+#                       ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
+#                       ,nl=TRUE)
+
+
+formula_sev <- bf(ACPC_increment  ~ a*exp(-exp(b)*(DevMth-75)-3)+exp(ult+7)
+                        , nlf(sigma ~ exp(c-exp(d)*(DevMth-75)-5-log(nzClm^0.5)) )
+                       ,a ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(DevMth,by=year_segment)
+                      ,b ~ (1|id|ReservingClass)
+                       ,c+d ~ (1|id|ReservingClass)
+                  ,ult ~ (poly(YOA,3)|id|ReservingClass)+(1|id2|year_segment)
+                       ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
                        ,nl=TRUE
                        )
-                               
+                                
 
 # specify std normal non-centred priors
 mypriors_sev <- c(
-  #prior(normal(0, 5), class = "Intercept",  dpar = "sigma"),
-  prior(normal(0, 3), nlpar = "mudev"),
-  prior(normal(0, 1), nlpar = "sigmadev"),
-  prior(normal(0, 5), nlpar = "ult"),
-  #prior(normal(0, 1),  nlpar = "sigmastd"),
-  #prior(normal(0, 1),  nlpar = "lambda"),
-  prior(normal(0, 5),  nlpar = "lambda")
   )
 ```
 
@@ -85,7 +90,7 @@ model_sev = brm(
   stanvars = stanvar(scode = sev_functions, block = "functions"),
   data = severity_data, 
   backend = "cmdstan",
-  threads = threading(12),
+  threads = threading(64),
   control = list(adapt_delta = 0.99),
   max_treedepth=20,
   #seed = 1235,
@@ -96,7 +101,7 @@ model_sev = brm(
   thin = 1,
   init = 0,
   chains = 2, 
-  cores = 12,
+  cores = 64,
   silent=2,
   #algorithm = "fullrank" # this uses variational inference rather than mcmc
   )
@@ -127,7 +132,8 @@ do some projections out to t=134 for each year in each segment
 
 
 ```{r}
-
+library(tidybayes)
+library(tidyr)
 
 plot_data_sev = severity_data %>% 
   group_by(ReservingClass,year_segment)%>%
