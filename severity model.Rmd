@@ -48,27 +48,22 @@ real lognormal_lccdf_mod(real a,real b,real c){
 
 "
 
-# writing the formula for the model 
-#formula_sev <- bf(ACPC_increment  ~ exp(exp(a)*ult+b+7+log_diff_exp(lognormal_lcdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))#,lognormal_lcdf_mod(DevMthprev,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev))))
-#                        #, nlf(sigma ~ exp(sigmastd-(exp(lambda)-log(0.01)/60)*DevMth))# expon ccdf for sigma. >99% dev by t=60
-#                        #, nlf(sigma ~ #exp(sigmastd-log(nzClm)+lognormal_lccdf_mod(DevMth,log(60)-2.3*exp(sigmadev)-exp(mudev),exp(sigmadev)+exp(lambda))) )
-#                        , nlf(sigma ~ exp(sigmastd-log(nzClm)+lognormal_lccdf_mod(DevMth,2,1)) )
-#                        , sigmastd ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
-#                        #, lambda ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
-#                       ,mudev ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
-#                       ,sigmadev~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
-#                       ,ult~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(YOA,by=ReservingClass)
-#                       ,a+b ~ (1|id|ReservingClass)
+
+#formula_sev <- bf(ACPC_increment  ~ a*1e3*exp(lognormal_lccdf_mod(DevMth,4,0.4))+ult*1e3
+#                        , nlf(sigma ~ exp(c+9+lognormal_lccdf_mod(DevMth,4,0.4)-0.5*log(nzClm)) )
+#                       ,a ~ (1|id|ReservingClass)+t2(DevMth,by=year_segment)
+#                      #,b ~ (1|id|ReservingClass)
+#                       ,c~ (1|id|ReservingClass)
+#                  ,ult ~ (poly(YOA,3)|id|ReservingClass)+(1|year_segment)
 #                       ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
-#                       ,nl=TRUE)
+#                       ,nl=TRUE
+#                       )
 
-
-formula_sev <- bf(ACPC_increment  ~ a*exp(-exp(b)*(DevMth-75)-3)+exp(ult+7)
-                        , nlf(sigma ~ exp(c-exp(d)*(DevMth-75)-5-log(nzClm^0.5)) )
-                       ,a ~ (1|id|ReservingClass)+(1|id2|year_segment)+t2(DevMth,by=year_segment)
-                      ,b ~ (1|id|ReservingClass)
-                       ,c+d ~ (1|id|ReservingClass)
-                  ,ult ~ (poly(YOA,3)|id|ReservingClass)+(1|id2|year_segment)
+formula_sev <- bf(ACPC  ~(exp(b)*3e4-exp(a)*3e4)/(1+exp(-DevMth*exp(-3)))+exp(a)*3e4+3e4 # logistic
+                        , nlf(sigma ~ exp(c+9) )
+                       ,a ~ (1|id|ReservingClass)+(1|id2|year_segment) #starting ACPC
+                       ,b ~ (1|id|ReservingClass)+(1|id2|year_segment) # ending ACPC
+                       ,c ~ (1|id|ReservingClass)
                        ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
                        ,nl=TRUE
                        )
@@ -98,7 +93,7 @@ model_sev = brm(
   iter = 5000, 
   #output_samples = 1000,
   warmup = 2500,
-  thin = 1,
+  thin = 10,
   init = 0,
   chains = 2, 
   cores = 64,
@@ -117,7 +112,7 @@ library(rstan) #making sure it is the one from CRAN, in this case 2.21.3 which i
 library(brms)
 modelRstan_sev = brm(
   formula_sev,
-  family = brmsfamily("gaussian",link = "identity",link_sigma = "identity"),
+  #family = brmsfamily("gaussian",link = "identity",link_sigma = "identity"),
   prior = mypriors_sev,
   stanvars = stanvar(scode = sev_functions, block = "functions"),
   data = severity_data,
@@ -137,11 +132,15 @@ library(tidyr)
 
 plot_data_sev = severity_data %>% 
   group_by(ReservingClass,year_segment)%>%
-  complete(DevMth=(max(DevMth)+1):134)%>% 
+  complete(DevMth=(max(DevMth)+1):134,fill = list(nzClm=0))%>% 
   arrange(DevMth)%>%
   mutate(DevMthprev = lag(DevMth,lag=1, default = 0.1)
-         ,YOA = first(YOA))%>%
-  add_linpred_draws(model_sev,dpar=TRUE,ndraws=100)%>%
+         ,YOA = first(YOA)
+         ,nzClm = (nzClm==0)*max(nzClm)+(nzClm>0)*nzClm
+         )%>%#View()
+  add_linpred_draws(model_sev,dpar=TRUE
+                    #,ndraws=100
+                    )%>%#View()
   group_by(ReservingClass,year_segment,.draw)%>%arrange(ReservingClass,year_segment,.draw,DevMth)%>%
   mutate(.prediction = rnorm(n(),mu,sigma))
   
