@@ -59,11 +59,12 @@ real lognormal_lccdf_mod(real a,real b,real c){
 #                       ,nl=TRUE
 #                       )
 
-formula_sev <- bf(ACPC  ~(exp(b)*3e4-exp(a)*3e4)/(1+exp(-DevMth*exp(-3)))+exp(a)*3e4+3e4 # logistic
-                        , nlf(sigma ~ exp(c+9) )
+formula_sev <- bf(ACPC  ~ (exp(b+8)-exp(a+8))*(1/(1+exp(-DevMth*exp(-3)))-0.5)*2+exp(a+8) #-(exp(b+8)-exp(a+8))*10*(1/(1+exp(-DevMthprev*exp(-3)))-0.5)*2# logistic incremental
+                        , nlf(sigma ~ exp(c*d+9+lognormal_lccdf_mod(DevMth,4,0.4)-0.5*log(nzClm)) )
                        ,a ~ (1|id|ReservingClass)+(1|id2|year_segment) #starting ACPC
                        ,b ~ (1|id|ReservingClass)+(1|id2|year_segment) # ending ACPC
                        ,c ~ (1|id|ReservingClass)
+                       ,d ~ 1
                        ,family = brmsfamily("gaussian",link = "identity",link_sigma = "identity")
                        ,nl=TRUE
                        )
@@ -71,6 +72,9 @@ formula_sev <- bf(ACPC  ~(exp(b)*3e4-exp(a)*3e4)/(1+exp(-DevMth*exp(-3)))+exp(a)
 
 # specify std normal non-centred priors
 mypriors_sev <- c(
+  prior(double_exponential(0, 1),  nlpar = "c"),
+  prior(normal(0, 1),  nlpar = "d")#,
+  #prior(normal(0, 5),  nlpar = "e")
   )
 ```
 
@@ -92,8 +96,8 @@ model_sev = brm(
   refresh = 1,
   iter = 500, 
   #output_samples = 1000,
-  warmup = 250,
-  thin = 1,
+  warmup = 400,
+  thin = 2,
   init = 0,
   chains = 2, 
   cores = 64,
@@ -170,7 +174,7 @@ pred_increments <- plot_data_sev%>%filter(as.numeric(ReservingClass)==selectedse
                         filter(YOA ==i)%>%
                         group_by(ReservingClass,YOA,.draw)%>%
                         arrange(DevMth)%>%
-                        mutate(N_predicted = .prediction)%>%
+                        mutate(N_predicted = (.prediction))%>%
                         ggplot(aes(x = DevMth, y = N_predicted)) +
                         stat_lineribbon() +
                         scale_fill_brewer() +
@@ -183,8 +187,8 @@ pred_increments <- plot_data_sev%>%filter(as.numeric(ReservingClass)==selectedse
               }
         }
 plot_list[[paste0("segment_",j)]] = plot_seg
-
 }
+
 plot_list$segment_1
 plot_list$segment_2
 plot_list$segment_3
