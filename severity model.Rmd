@@ -146,7 +146,7 @@ plot_data_sev = severity_data %>%
                     #,ndraws=100
                     )%>%#View()
   group_by(ReservingClass,year_segment,.draw)%>%arrange(ReservingClass,year_segment,.draw,DevMth)%>%
-  mutate(.prediction = rnorm(n(),mu,sigma))
+  mutate(.prediction = exp(8)*log(1+exp(rnorm(n(),mu,sigma)/exp(8)))) # add softplus to avoid negative ACPC samples
   
 
 ```
@@ -174,7 +174,7 @@ pred_increments <- plot_data_sev%>%filter(as.numeric(ReservingClass)==selectedse
                         filter(YOA ==i)%>%
                         group_by(ReservingClass,YOA,.draw)%>%
                         arrange(DevMth)%>%
-                        mutate(N_predicted = (.prediction))%>%
+                        mutate(N_predicted = .prediction)%>%
                         ggplot(aes(x = DevMth, y = N_predicted)) +
                         stat_lineribbon() +
                         scale_fill_brewer() +
