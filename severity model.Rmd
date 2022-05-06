@@ -190,7 +190,7 @@ plot_list[[paste0("segment_",j)]] = plot_seg
 }
 
 for (i in names(plot_list)){
-  print(plot_list[[i]])
+  plot(plot_list[[i]])
 }
 
 
