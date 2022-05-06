@@ -189,14 +189,10 @@ pred_increments <- plot_data_sev%>%filter(as.numeric(ReservingClass)==selectedse
 plot_list[[paste0("segment_",j)]] = plot_seg
 }
 
-plot_list$segment_1
-plot_list$segment_2
-plot_list$segment_3
-plot_list$segment_4
-plot_list$segment_5
-plot_list$segment_6
-plot_list$segment_7
-plot_list$segment_8
+for (i in names(plot_list)){
+  print(plot_list[[i]])
+}
+
 
 
 ```
