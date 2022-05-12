@@ -178,7 +178,7 @@ pred_increments <- plot_data_sev%>%filter(as.numeric(ReservingClass)==selectedse
                         ggplot(aes(x = DevMth, y = N_predicted)) +
                         stat_lineribbon() +
                         scale_fill_brewer() +
-                        geom_point(data = pred_increments%>%filter(YOA ==(i),.draw==1), aes(DevMth, ACPC))+ggtitle(paste0(2022-12+i))+xlab("development month")+ylab("# claims")
+                        geom_point(data = pred_increments%>%filter(YOA ==(i),.draw==1), aes(DevMth, ACPC))+ggtitle(paste0(i))+xlab("development month")+ylab("# claims")
           
           if (i==min(pred_increments$YOA)){ 
             plot_seg = ACPC_plot[[k]] 
