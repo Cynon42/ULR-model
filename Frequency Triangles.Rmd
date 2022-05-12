@@ -2576,7 +2576,7 @@ pred_increments <- plot_data2%>%filter(as.numeric(segment)==selectedsegment)
                         ggplot(aes(x = t, y = N_predicted)) +
                         stat_lineribbon() +
                         scale_fill_brewer() +
-                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t, N+N_pos_cum-N_pos_cum))
+                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t, N+N_pos_cum-N_pos_cum))+ggtitle(paste0(2022-12+i))+xlab("development month")+ylab("# claims")
           Npos_plot[[k]] = pred_increments%>%
                         filter(year ==i,modelflag==1)%>%
                         group_by(segment,year,.draw)%>%
@@ -2585,7 +2585,7 @@ pred_increments <- plot_data2%>%filter(as.numeric(segment)==selectedsegment)
                         ggplot(aes(x = t, y = N_predicted)) +
                         stat_lineribbon() +
                         scale_fill_brewer() +
-                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t,        N_pos_cum))
+                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t,        N_pos_cum))+ggtitle(paste0(2022-12+i))+xlab("development month")+ylab("# claims")
           Nneg_plot[[k]] = pred_increments%>%
                         filter(year ==i,modelflag==0)%>%
                         group_by(segment,year,.draw)%>%
@@ -2594,7 +2594,7 @@ pred_increments <- plot_data2%>%filter(as.numeric(segment)==selectedsegment)
                         ggplot(aes(x = t, y = N_predicted)) +
                         stat_lineribbon() +
                         scale_fill_brewer() +
-                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t,        N_pos_cum-N))
+                        geom_point(data = pred_increments%>%filter(year ==(i),modelflag==1,.draw==1), aes(t,        N_pos_cum-N))+ggtitle(paste0(2022-12+i))+xlab("development month")+ylab("# claims")
           if (i==min(pred_increments$year)){ 
             plotN = N_plot[[k]] 
             plotNpos = Npos_plot[[k]]
@@ -2605,34 +2605,24 @@ pred_increments <- plot_data2%>%filter(as.numeric(segment)==selectedsegment)
               plotNneg = plotNneg + Nneg_plot[[k]]
               }
         }
-plotN_list[[paste0("segment_",j)]] = plotN
-plotNpos_list[[paste0("segment_",j)]] = plotNpos
-plotNneg_list[[paste0("segment_",j)]] = plotNneg
+plotN_list[[paste0("segment_",j)]] = plotN + plot_annotation(title = paste0("Non-Zero Claim Count Development
+",(plot_data2%>%filter(as.numeric(segment)==selectedsegment))$segment[1]) )
+plotNpos_list[[paste0("segment_",j)]] = plotNpos + plot_annotation(title = paste0("Non-Zero Claim Report Development
+",(plot_data2%>%filter(as.numeric(segment)==selectedsegment))$segment[1]) )
+plotNneg_list[[paste0("segment_",j)]] = plotNneg+ plot_annotation(title = paste0("Development of Non-zero Claims Returning to Nil Incurred
+",(plot_data2%>%filter(as.numeric(segment)==selectedsegment))$segment[1]) )
 
 }
-plotN_list$segment_1
-plotN_list$segment_2
-plotN_list$segment_3
-plotN_list$segment_4
-plotN_list$segment_5
-plotN_list$segment_6
-plotN_list$segment_7
-plotN_list$segment_8
-plotNpos_list$segment_1
-plotNpos_list$segment_2
-plotNpos_list$segment_3
-plotNpos_list$segment_4
-plotNpos_list$segment_5
-plotNpos_list$segment_6
-plotNpos_list$segment_7
-plotNpos_list$segment_8
-plotNneg_list$segment_1
-plotNneg_list$segment_2
-plotNneg_list$segment_3
-plotNneg_list$segment_4
-plotNneg_list$segment_5
-plotNneg_list$segment_6
-plotNneg_list$segment_7
-plotNneg_list$segment_8
+
+for (i in names(plotN_list)){
+  plotN_list[[i]]%>%print()
+}
+for (i in names(plotN_list)){
+  plotNpos_list[[i]]%>%print()
+}
+for (i in names(plotN_list)){
+  plotNneg_list[[i]]%>%print()
+}
+
 
 ```
