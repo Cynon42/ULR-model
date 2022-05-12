@@ -1,0 +1,30 @@
+---
+title: "Frequency Model Actual vs Expected Plots"
+author: "Cy Sonkkila"
+date: '2022-05-12'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r,fig.width=10,fig.height=8}
+library(plotly)
+library(ggplot2)
+library(patchwork)
+options(warn=-1)
+
+load("final output including plots.RData")
+for (i in names(plotN_list)){
+  plotN_list[[i]]%>%print()
+}
+for (i in names(plotN_list)){
+  plotNpos_list[[i]]%>%print()
+}
+for (i in names(plotN_list)){
+  plotNneg_list[[i]]%>%print()
+}
+
+options(warn=0)
+```
